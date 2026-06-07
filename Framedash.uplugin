@@ -1,0 +1,24 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Framedash",
+	"Description": "Game Telemetry SDK",
+	"Category": "Other",
+	"CreatedBy": "Crane Valley",
+	"CreatedByURL": "https://www.crane-valley.co.jp/",
+	"DocsURL": "https://docs.framedash.dev/en/sdk/ue5",
+	"MarketplaceURL": "",
+	"SupportURL": "https://github.com/crane-valley/framedash-ue5-sdk/issues",
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "Framedash",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

@@ -1,0 +1,14 @@
+# nanopb options for telemetry.proto
+# String fields: use callbacks to avoid fixed-size buffers
+framedash.v1.GameTelemetryEvent.event_name   type:FT_CALLBACK
+framedash.v1.GameTelemetryEvent.session_id   type:FT_CALLBACK
+framedash.v1.GameTelemetryEvent.player_id    type:FT_CALLBACK
+framedash.v1.GameTelemetryEvent.map_id       type:FT_CALLBACK
+framedash.v1.GameTelemetryEvent.build_id     type:FT_CALLBACK
+framedash.v1.GameTelemetryEvent.platform     type:FT_CALLBACK
+framedash.v1.GameTelemetryEvent.engine_version type:FT_CALLBACK
+# Map fields: use callbacks for flexible encoding
+framedash.v1.GameTelemetryEvent.attributes   type:FT_CALLBACK
+framedash.v1.GameTelemetryEvent.metrics      type:FT_CALLBACK
+# Repeated field: use callbacks for batch events
+framedash.v1.TelemetryBatch.events           type:FT_CALLBACK
