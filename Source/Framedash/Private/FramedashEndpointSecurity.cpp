@@ -38,6 +38,100 @@ namespace
 		}
 		return true;
 	}
+
+	// The userinfo-stripped authority ("host" or "host:port", or "[v6]" /
+	// "[v6]:port"). Uses the same scheme/authority/userinfo bounding rules as
+	// ExtractUrlHost so the host and port halves are parsed consistently.
+	std::string_view ExtractAuthority(std::string_view Url)
+	{
+		const std::size_t SchemeEnd = Url.find("://");
+		std::string_view Remainder =
+			(SchemeEnd == std::string_view::npos) ? Url : Url.substr(SchemeEnd + 3);
+
+		const std::size_t AuthorityEnd = Remainder.find_first_of("/?#\\");
+		std::string_view Authority = (AuthorityEnd == std::string_view::npos)
+			? Remainder
+			: Remainder.substr(0, AuthorityEnd);
+
+		const std::size_t AtIndex = Authority.find_last_of('@');
+		if (AtIndex != std::string_view::npos)
+		{
+			Authority = Authority.substr(AtIndex + 1);
+		}
+		return Authority;
+	}
+
+	// Lowercased scheme, or empty when the URL has no "scheme://" prefix.
+	std::string ExtractUrlScheme(std::string_view Url)
+	{
+		const std::size_t SchemeEnd = Url.find("://");
+		if (SchemeEnd == std::string_view::npos)
+		{
+			return {};
+		}
+		return ToLower(Url.substr(0, SchemeEnd));
+	}
+
+	// Explicit port digits, or empty when none is present (caller defaults by
+	// scheme). Returns empty on a malformed IPv6 authority.
+	std::string ExtractUrlPort(std::string_view Url)
+	{
+		std::string_view Authority = ExtractAuthority(Url);
+		if (Authority.empty())
+		{
+			return {};
+		}
+
+		if (Authority.front() == '[')
+		{
+			const std::size_t Close = Authority.find(']');
+			if (Close == std::string_view::npos)
+			{
+				return {}; // unterminated bracket -> no usable port
+			}
+			std::string_view AfterClose = Authority.substr(Close + 1);
+			if (AfterClose.size() > 1 && AfterClose.front() == ':')
+			{
+				return std::string(AfterClose.substr(1));
+			}
+			return {};
+		}
+
+		const std::size_t ColonIndex = Authority.find(':');
+		if (ColonIndex == std::string_view::npos)
+		{
+			return {};
+		}
+		return std::string(Authority.substr(ColonIndex + 1));
+	}
+
+	// Normalized security origin "scheme://host:port" with default ports applied
+	// (http -> 80, https -> 443). Empty when the scheme or host is missing, which
+	// the caller treats as "unparseable -> do not flag".
+	std::string ExtractUrlOrigin(std::string_view Url)
+	{
+		const std::string Scheme = ExtractUrlScheme(Url);
+		const std::string Host = ExtractUrlHost(Url);
+		if (Scheme.empty() || Host.empty())
+		{
+			return {};
+		}
+
+		std::string Port = ExtractUrlPort(Url);
+		if (Port.empty())
+		{
+			if (Scheme == "http")
+			{
+				Port = "80";
+			}
+			else if (Scheme == "https")
+			{
+				Port = "443";
+			}
+		}
+
+		return Scheme + "://" + Host + ":" + Port;
+	}
 }
 
 std::string ExtractUrlHost(std::string_view Url)
@@ -136,5 +230,54 @@ bool IsEndpointSecure(std::string_view Url)
 		}
 	}
 	return StartsWithCaseInsensitive(Url, "https://");
+}
+
+bool IsCrossOriginRedirect(std::string_view ConfiguredUrl, std::string_view EffectiveUrl)
+{
+	// Fast path: an identical URL (the common no-redirect case, since GetEffectiveURL
+	// returns the request URL when nothing was redirected) is the same origin --
+	// skip parsing and allocation entirely.
+	if (ConfiguredUrl == EffectiveUrl)
+	{
+		return false;
+	}
+
+	// No effective URL reported (a backend that does not populate it): cannot
+	// reason about origin, so treat as same origin and never drop legitimate
+	// telemetry. This is defense in depth, not the primary gate.
+	if (EffectiveUrl.empty())
+	{
+		return false;
+	}
+
+	// A control character, '@' (userinfo), or '\' in the effective URL is the same
+	// libcurl host-parsing differential IsEndpointSecure rejects on the configured
+	// URL: libcurl splits the host at the LAST '@' and treats '\' literally, while
+	// this WHATWG-style parser stops the authority at '\'. So an effective URL like
+	// "https://ingest.example\@evil/..." would parse here as the configured host yet
+	// libcurl connected to evil. Fail CLOSED (treat as cross origin) rather than
+	// risk a missed leak -- a legitimate telemetry URL never contains these.
+	for (const char Ch : EffectiveUrl)
+	{
+		const unsigned char Byte = static_cast<unsigned char>(Ch);
+		if (Byte < 0x20 || Byte == 0x7f || Ch == '@' || Ch == '\\')
+		{
+			return true;
+		}
+	}
+
+	const std::string ConfiguredOrigin = ExtractUrlOrigin(ConfiguredUrl);
+	const std::string EffectiveOrigin = ExtractUrlOrigin(EffectiveUrl);
+
+	// Fail open only when an origin cannot be determined at all (missing scheme or
+	// host) rather than dropping telemetry on a value we cannot parse. A parseable
+	// but different origin -- including a malformed/non-numeric port, which never
+	// appears in a legitimate landing URL -- fails closed below.
+	if (ConfiguredOrigin.empty() || EffectiveOrigin.empty())
+	{
+		return false;
+	}
+
+	return ConfiguredOrigin != EffectiveOrigin;
 }
 }

@@ -38,7 +38,10 @@ public:
 	// FTickableGameObject interface
 	virtual void Tick(float DeltaTime) override;
 	virtual bool IsTickable() const override { return !IsTemplate() && bInitialized; }
-	virtual bool IsTickableWhenPaused() const override { return false; }
+	// Tick even while the game is paused so the flush/heartbeat cadence keeps
+	// running (a pause menu must not silently stall telemetry). The timers are
+	// driven by real wall-clock time in Tick, not the engine-scaled DeltaTime.
+	virtual bool IsTickableWhenPaused() const override { return true; }
 	virtual TStatId GetStatId() const override { RETURN_QUICK_DECLARE_CYCLE_STAT(UFramedashSubsystem, STATGROUP_Tickables); }
 
 	/**
@@ -116,6 +119,12 @@ private:
 	/** Truncate string to max length. */
 	static FString TruncateString(const FString& Input, int32 MaxLength);
 
+	/** Refresh the cached camera rotation on the game thread (called from Tick). */
+	void UpdateCachedCameraRotation();
+
+	/** Stamp Evt.CameraYaw/CameraPitch from the thread-safe cached snapshot. */
+	void CaptureCameraRotation(FFramedashEvent& Evt) const;
+
 	// TPimplPtr type-erases the deleter at construction time, so forward-declared
 	// (incomplete) types work without C4150 on MSVC. No out-of-line destructor needed.
 	TPimplPtr<FFramedashEventBuffer> EventBuffer;
@@ -143,6 +152,12 @@ private:
 
 	float TimeSinceLastFlush = 0.0f;
 	float TimeSinceLastHeartbeat = 0.0f;
+	// Real wall-clock timestamp (FPlatformTime::Seconds) of the previous Tick.
+	// The flush/heartbeat timers accumulate this real delta instead of the
+	// engine-scaled DeltaTime so pausing or time dilation does not stall or
+	// stretch the cadence. Seeded to now in InitializeInternal so the first Tick
+	// measures a one-frame delta (Tick has no first-call branch).
+	double LastTickSeconds = 0.0;
 	int32 EstimatedPayloadBytes = 0;
 	int32 PendingPersistedEventsToAck = 0;
 	uint64 NextBatchId = 1;
@@ -150,4 +165,12 @@ private:
 	bool bIsFlushing = false;
 	bool bWarnedEmptyPlayerId = false;
 	bool bOfflineQueueEnabled = true;
+	bool bCaptureCameraRotation = true;
+
+	// Camera rotation sampled on the game thread (Tick) and read in
+	// CaptureCameraRotation. The lock guards the pair so it is always read coherently.
+	mutable FCriticalSection CameraRotationCS;
+	float CachedCameraYaw = 0.0f;
+	float CachedCameraPitch = 0.0f;
+	bool bHasCachedCamera = false;
 };

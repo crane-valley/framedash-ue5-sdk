@@ -2,6 +2,7 @@
 
 #include "FramedashPersistenceProvider.h"
 #include "Framedash.h"
+#include "FramedashEngineCompat.h"
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
@@ -265,7 +266,7 @@ bool FFilePersistence::Append(const TArray<FFramedashEvent>& Events)
 	const int32 Overflow = ExistingEvents.Num() - FramedashConstants::MaxPersistedEvents;
 	if (Overflow > 0)
 	{
-		ExistingEvents.RemoveAt(0, Overflow, EAllowShrinking::No);
+		ExistingEvents.RemoveAt(0, Overflow, FRAMEDASH_ALLOW_SHRINKING_NO);
 		UE_LOG(LogFramedash, Warning, TEXT("Offline queue full. Dropped %d oldest persisted event(s)."), Overflow);
 	}
 
@@ -292,7 +293,7 @@ bool FFilePersistence::DropOldest(int32 Count)
 		return ClearFromDisk();
 	}
 
-	ExistingEvents.RemoveAt(0, Count, EAllowShrinking::No);
+	ExistingEvents.RemoveAt(0, Count, FRAMEDASH_ALLOW_SHRINKING_NO);
 	return SaveToDisk(ExistingEvents);
 }
 

@@ -60,6 +60,18 @@ private:
 	/** Validate that the endpoint URL uses HTTPS (localhost exemption). */
 	bool ValidateEndpointSecurity() const;
 
+	/**
+	 * Split a batch in half and re-send each half via SendBatch.
+	 * Owns the shared PendingChildren counter and the CloseParentIfDone
+	 * chaining so callers do not duplicate the ~50-line bookkeeping.
+	 * Used by three split sites: MaxBatchSize pre-check, payload-size
+	 * post-compression check, and 413 reactive split.
+	 */
+	void SplitBatchAndResend(
+		TArray<FFramedashEvent> Events,
+		FFramedashBatchFailureHandler OnTransientFailure,
+		FFramedashBatchClosedHandler OnClosed);
+
 	FString EndpointUrl;
 	FString ApiKey;
 

@@ -61,12 +61,13 @@ ERetryAction FRetryPolicy::Classify(int HttpStatusCode, int Attempt, int EventCo
 	if (HttpStatusCode == 413)
 		return ERetryAction::Fail;
 
-	// 3xx escapes the HTTP client only when redirect-following is disabled
-	// or the redirect target is unreachable. Treat as Fail so a misconfigured
-	// endpoint surfaces immediately instead of consuming the full retry budget
-	// on every batch (matches the original UE5 transport behavior; this
-	// deliberately diverges from the Unity RetryPolicy until Unity is
-	// updated to do the same).
+	// A surfaced 3xx is treated as Fail. Unity sets redirectLimit=0, so a
+	// redirect surfaces here directly; UE's curl backend follows redirects
+	// (CURLOPT_FOLLOWLOCATION, no portable toggle to disable) so a 3xx rarely
+	// reaches this point -- the UE transport instead detects a cross-origin
+	// landing via the response's effective URL. Either way a 3xx that does
+	// surface means a misconfigured or compromised endpoint that should fail
+	// fast instead of consuming the full retry budget on every batch.
 	if (HttpStatusCode >= 300 && HttpStatusCode < 400)
 		return ERetryAction::Fail;
 

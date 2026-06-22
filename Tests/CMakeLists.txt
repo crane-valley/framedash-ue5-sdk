@@ -33,11 +33,15 @@ enable_testing()
 include(GoogleTest)
 
 add_executable(framedash_ue5_tests
+	BatchPolicyTests.cpp
+	CameraMathTests.cpp
 	EndpointSecurityTests.cpp
+	FramedashFieldClampsTests.cpp
 	FlushPolicyTests.cpp
 	ProtobufSerializerTests.cpp
 	RetryPolicyTests.cpp
 	UuidTests.cpp
+	${PLUGIN_PRIVATE_DIR}/FramedashBatchPolicy.cpp
 	${PLUGIN_PRIVATE_DIR}/FramedashEndpointSecurity.cpp
 	${PLUGIN_PRIVATE_DIR}/FramedashFlushPolicy.cpp
 	${PLUGIN_PRIVATE_DIR}/FramedashProtobufSerializer.cpp

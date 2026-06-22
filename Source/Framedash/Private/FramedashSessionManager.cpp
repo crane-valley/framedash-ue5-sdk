@@ -2,6 +2,8 @@
 
 #include "FramedashSessionManager.h"
 #include "Framedash.h"
+#include "FramedashTypes.h"
+#include "FramedashStringUtil.h"
 #include "FramedashUuid.h"
 #include "Misc/DateTime.h"
 #include "Misc/Guid.h"
@@ -13,6 +15,20 @@ namespace
 // Ticks (100ns) between FDateTime epoch (0001-01-01T00:00:00Z) and Unix
 // epoch (1970-01-01T00:00:00Z). Matches FDateTime::ToUnixTimestamp.
 constexpr int64 UnixEpochInDateTimeTicks = 621355968000000000;
+
+// Trim whitespace and truncate to the ingest player_id cap. An over-limit
+// player_id is rejected by ingest validation, which drops the whole batch, so
+// the SDK normalizes it before storing. Truncation goes through
+// TruncateToUtf16Units so it counts UTF-16 code units (the server's JS
+// string-length unit) correctly on both 2- and 4-byte TCHAR builds, mirroring
+// the Godot/Unity C# SDKs.
+FString NormalizePlayerId(const FString& PlayerId)
+{
+	// Truncate by UTF-16 code units (ingest's unit), surrogate-safe and
+	// platform-correct. See FramedashStringUtil.h.
+	return Framedash::TruncateToUtf16Units(
+		PlayerId.TrimStartAndEnd(), FramedashConstants::MaxPlayerIdLength);
+}
 
 Framedash::FXoshiro256pp& GetSessionIdRng()
 {
@@ -53,7 +69,7 @@ FString NewSessionIdV7()
 } // namespace
 
 FFramedashSessionManager::FFramedashSessionManager(const FString& InPlayerId)
-	: PlayerId(InPlayerId.TrimStartAndEnd())
+	: PlayerId(NormalizePlayerId(InPlayerId))
 {
 	SessionId = NewSessionIdV7();
 	UE_LOG(LogFramedash, Log, TEXT("Session: %s, Player: %s"), *SessionId, PlayerId.IsEmpty() ? TEXT("(anonymous)") : TEXT("(set)"));
@@ -61,6 +77,16 @@ FFramedashSessionManager::FFramedashSessionManager(const FString& InPlayerId)
 
 void FFramedashSessionManager::SetPlayerId(const FString& NewPlayerId)
 {
-	check(IsInGameThread());
-	PlayerId = NewPlayerId.TrimStartAndEnd();
+	// Graceful guard, NOT a fatal check(): the SDK's hard rule is to never crash
+	// the game. SetPlayerId mutates PlayerId without synchronization and must run
+	// on the game thread. The early-return is gated on an explicit IsInGameThread()
+	// so control flow never depends on whether ensure is compiled in; ensureMsgf is
+	// used only to surface the misuse with a callstack in development. Both are
+	// non-fatal, so a mis-threaded call is ignored rather than crashing.
+	if (!IsInGameThread())
+	{
+		ensureMsgf(false, TEXT("SetPlayerId must be called from the game thread; off-thread call ignored."));
+		return;
+	}
+	PlayerId = NormalizePlayerId(NewPlayerId);
 }

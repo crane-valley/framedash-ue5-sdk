@@ -44,10 +44,13 @@ public:
 
 	// Classify the response into the action the transport should take.
 	// 5xx, 429, and network errors (status 0) are retried until MaxRetries
-	// is reached. 3xx is treated as Fail because the HTTP client follows
-	// redirects internally; an escaping 3xx means a misconfigured endpoint
-	// that should surface immediately (this diverges from the Unity
-	// RetryPolicy fall-through pending an alignment pass on Unity).
+	// is reached. A surfaced 3xx is treated as Fail: Unity sets
+	// redirectLimit=0 so a redirect surfaces here directly, while UE's curl
+	// backend follows redirects (no portable toggle to disable) so a 3xx
+	// rarely reaches this point and the UE transport instead detects a
+	// cross-origin landing via the response's effective URL. Either way a
+	// surfaced 3xx means a misconfigured or compromised endpoint that should
+	// fail fast rather than consume the retry budget. Unity matches this.
 	ERetryAction Classify(int HttpStatusCode, int Attempt, int EventCount) const;
 
 private:

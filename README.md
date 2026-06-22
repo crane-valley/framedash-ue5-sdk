@@ -4,7 +4,7 @@ Unreal Engine 5 plugin for collecting game telemetry and sending it to the Frame
 
 ## Requirements
 
-- Unreal Engine 5.3 or newer. This is a source plugin that compiles against the Unreal Engine version of your project. The descriptor does not pin `EngineVersion`, so the plugin is not restricted to a single engine release.
+- Unreal Engine 5.3 or newer. This is a source plugin that compiles against the Unreal Engine version of your project; the descriptor does not pin `EngineVersion`, so it is not tied to a single engine release. Build-verified on UE 5.3, 5.4, 5.5, and 5.6. Note: the credential-leaking cross-origin redirect detection in the transport requires `IHttpBase::GetEffectiveURL` (UE 5.4+); on UE 5.3 that one defense is compiled out, and the rest of the SDK is unaffected.
 
 ## Structure
 
@@ -84,6 +84,42 @@ events are dropped first so gameplay is never blocked by telemetry.
 ## Performance Collection
 
 Uses `FApp::GetDeltaTime()` for wall-clock frame time. GPU time is collected via `RHIGetGPUFrameCycles()` and converted to milliseconds. Game thread and render thread timing use `GGameThreadTime` / `GRenderThreadTime` globals from the RenderCore module. See [Frame Timing Metrics Guide](../../docs/en/frame-timing-metrics.md) for details on available metrics and collection APIs.
+
+## Field Limits
+
+Every event field is clamped client-side to the Framedash ingest limits before
+it is buffered. The ingest validator rejects an entire batch if any single field
+is out of range (a 202 is returned first, then the batch is dropped during
+processing), so the SDK normalizes each field so one bad value cannot lose
+unrelated events in the same flush.
+
+| Field | Limit | Over-limit handling |
+|-------|-------|---------------------|
+| `event_name` | 1–128 chars | Empty/whitespace-only dropped; longer truncated to 128 |
+| `map_id` | ≤ 128 chars | Truncated to 128 |
+| `build_id` | ≤ 128 chars | Truncated to 128 (once, at initialization) |
+| `player_id` | ≤ 128 chars | Trimmed, then truncated to 128 |
+| Position `x`/`y`/`z` | finite, \|v\| ≤ 1e9 | NaN/Inf → 0; magnitude clamped to ±1e9 |
+| Attributes | ≤ 50 entries | Extra entries and empty keys dropped |
+| Attribute key / value | ≤ 64 / ≤ 512 chars | Truncated |
+| Metrics | ≤ 50 entries | Extra entries, empty keys, and NaN/Inf values dropped |
+| Metric key | ≤ 64 chars | Truncated |
+| `fps` | 0–1000 | Clamped (NaN/negative → 0) |
+| `frame_time_ms` / `gpu_time_ms` / `game_thread_ms` / `render_thread_ms` | 0–10000 | Clamped (NaN/negative → 0) |
+| `memory_used_bytes` | 0–64 GiB | Negative → 0; above 64 GiB capped |
+| `platform` / `engine_version` | ≤ 64 chars | Auto-collected; truncated (a custom engine branch name can exceed the cap) |
+
+Truncation counts UTF-16 code units (via `TruncateToUtf16Units`), matching the
+server's string-length semantics on every platform (UE's `TCHAR` is 2 bytes on
+Windows but 4 bytes on Linux/macOS, so a raw `FString::Len()`/`Left()` would
+under-count non-BMP characters). These caps mirror the Godot and Unity SDKs and
+stay in sync with `packages/ingest-core/src/config.ts`.
+
+## Camera Direction
+
+When **Capture Camera Rotation** is enabled (the default), every event records the local player's camera yaw and pitch, which powers the direction breakdown on the heatmap cell-detail view. The SDK samples the active `PlayerCameraManager` rotation each tick on the game thread and stamps events from that cached snapshot; like all SDK methods, `Track()` is intended to be called on the game thread. Capture is skipped on dedicated servers and before a local `PlayerController` exists, so it never affects headless builds. Yaw is normalized to `[0, 360)` and increases clockwise; the direction chart labels yaw 0 as North, with the engine's forward axis as that reference (a game world has no geographic North, so the compass labels are relative). Pitch is `[-90, 90]` (+90 = looking up).
+
+Disable it under **Project Settings > Plugins > Framedash > Capture Camera Rotation**, or set `bCaptureCameraRotation=False` in `Config/DefaultGame.ini`.
 
 ## Quick Start
 

@@ -10,9 +10,18 @@
 #include "FramedashSamplingPolicy.h"
 #include "FramedashPersistenceProvider.h"
 #include "FramedashFlushPolicy.h"
+#include "FramedashFieldClamps.h"
+#include "FramedashStringUtil.h"
+#include "FramedashEngineCompat.h"
 
 #include "Async/Async.h"
 #include "Misc/EngineVersion.h"
+#include "HAL/PlatformTime.h"
+#include "Misc/Char.h"
+#include "GameFramework/PlayerController.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Engine/World.h"
+#include "FramedashCameraMath.h"
 
 UFramedashSubsystem::UFramedashSubsystem()
 {
@@ -105,9 +114,29 @@ void UFramedashSubsystem::InitializeInternal(const FString& ApiKey, const FStrin
 
 	CachedApiKey = ApiKey;
 	CachedEndpointUrl = EndpointUrl;
-	CachedBuildId = BuildId;
-	CachedPlatform = FPlatformProperties::IniPlatformName();
-	CachedEngineVersion = FEngineVersion::Current().ToString();
+	// Truncate the cached string fields once here so every event stamps a
+	// wire-valid value (ingest drops the whole batch if any exceeds its cap).
+	// FEngineVersion::ToString() in particular can carry a long custom branch name.
+	CachedBuildId = TruncateString(BuildId, FramedashConstants::MaxBuildIdLength);
+	CachedPlatform = TruncateString(FPlatformProperties::IniPlatformName(), FramedashConstants::MaxPlatformLength);
+	CachedEngineVersion = TruncateString(FEngineVersion::Current().ToString(), FramedashConstants::MaxEngineVersionLength);
+
+	// Reset per-session scalar state so a Shutdown()+re-init starts clean. Seed
+	// LastTickSeconds to now: a stale value would make the first post-reinit Tick
+	// accumulate the entire shutdown gap as one RealDelta and fire a premature
+	// flush/heartbeat. Seeding to now (rather than 0) also lets Tick drop its
+	// first-call branch.
+	LastTickSeconds = FPlatformTime::Seconds();
+	TimeSinceLastFlush = 0.0f;
+	TimeSinceLastHeartbeat = 0.0f;
+	EstimatedPayloadBytes = 0;
+	bWarnedEmptyPlayerId = false;
+	// Reset the single-flight flush guard too. The transport is recreated below, so
+	// a prior in-flight flush's OnClosed is dropped by its now-stale AliveFlag and
+	// would never clear this flag; left stuck true it would silently halt every
+	// flush for the new session. Because that stale callback is dropped, clearing
+	// the flag here cannot race a prior session's in-flight send.
+	bIsFlushing = false;
 
 	EventBuffer = MakePimpl<FFramedashEventBuffer>(FramedashConstants::EventBufferCapacity);
 	Transport = MakePimpl<FFramedashTransport>(CachedEndpointUrl, CachedApiKey);
@@ -121,6 +150,7 @@ void UFramedashSubsystem::InitializeInternal(const FString& ApiKey, const FStrin
 		FramedashConstants::EstimatedBytesPerEvent);
 	const UFramedashSettings* Settings = GetDefault<UFramedashSettings>();
 	bOfflineQueueEnabled = !(Settings && !Settings->bEnableOfflineQueue);
+	bCaptureCameraRotation = Settings ? Settings->bCaptureCameraRotation : true;
 	if (!bOfflineQueueEnabled)
 	{
 		PersistenceProvider = MakeShared<FNullPersistence, ESPMode::ThreadSafe>();
@@ -223,9 +253,25 @@ void UFramedashSubsystem::TrackWithData(
 		return;
 	}
 
-	if (EventName.IsEmpty())
+	// Reject empty OR whitespace-only names. The empty rejection mirrors a hard
+	// ingest requirement (validation.ts REQUIRED_NON_EMPTY_FIELDS checks
+	// length === 0; it does NOT trim); the whitespace rejection is an SDK-side
+	// data-quality guard (a whitespace name would pass ingest but is useless).
+	// Matches the Godot SDK's IsNullOrWhiteSpace guard.
+	// Non-allocating whitespace/empty check (TrimStartAndEnd would heap-allocate a
+	// copy on this per-event path just to test emptiness).
+	bool bNameIsBlank = true;
+	for (int32 Index = 0; Index < EventName.Len(); ++Index)
 	{
-		UE_LOG(LogFramedash, Warning, TEXT("EventName must not be empty. Event dropped."));
+		if (!FChar::IsWhitespace(EventName[Index]))
+		{
+			bNameIsBlank = false;
+			break;
+		}
+	}
+	if (bNameIsBlank)
+	{
+		UE_LOG(LogFramedash, Warning, TEXT("EventName must not be empty or whitespace. Event dropped."));
 		return;
 	}
 
@@ -266,8 +312,14 @@ void UFramedashSubsystem::TrackWithData(
 
 	Evt.SessionId = SessionManager->GetSessionId();
 	Evt.PlayerId = SessionManager->GetPlayerId();
-	Evt.Position = Position;
-	Evt.MapId = MapId;
+	// Sanitize coordinates: ingest rejects NaN/Inf or |v| > 1e9 and drops the
+	// whole batch, so one bad physics frame would lose unrelated events.
+	// FVector is double-precision in UE5.
+	Evt.Position = FVector(
+		Framedash::FieldClamps::SanitizeCoord(Position.X),
+		Framedash::FieldClamps::SanitizeCoord(Position.Y),
+		Framedash::FieldClamps::SanitizeCoord(Position.Z));
+	Evt.MapId = TruncateString(MapId, FramedashConstants::MaxMapIdLength);
 	Evt.Fps = Perf.Fps;
 	Evt.FrameTimeMs = Perf.FrameTimeMs;
 	Evt.MemoryUsedBytes = Perf.MemoryUsedBytes;
@@ -279,22 +331,36 @@ void UFramedashSubsystem::TrackWithData(
 	Evt.Platform = CachedPlatform;
 	Evt.EngineVersion = CachedEngineVersion;
 
-	// Copy attributes (with limit)
-	int32 AttrCount = 0;
+	// Copy attributes, enforcing the ingest caps client-side (count, key/value
+	// length). A single oversized map entry would make the consumer drop the
+	// whole flush. Empty keys are skipped (the server keys the map by name).
+	// Guard on the map's actual size, not a manual counter: two distinct long keys
+	// can truncate to the same key and collapse to one TMap entry, so a manual
+	// counter would stop short of MaxAttributePairs real entries.
 	for (const auto& Pair : Attributes)
 	{
-		if (AttrCount >= FramedashConstants::MaxAttributePairs) break;
-		Evt.Attributes.Add(Pair.Key, Pair.Value);
-		++AttrCount;
+		if (Evt.Attributes.Num() >= FramedashConstants::MaxAttributePairs) break;
+		if (Pair.Key.IsEmpty()) continue;
+		Evt.Attributes.Add(
+			TruncateString(Pair.Key, FramedashConstants::MaxAttributeKeyLength),
+			TruncateString(Pair.Value, FramedashConstants::MaxAttributeValueLength));
 	}
 
-	// Copy metrics (with limit)
-	int32 MetricCount = 0;
+	// Copy metrics, enforcing the ingest caps client-side (count, key length,
+	// finite values). Non-finite metric values are rejected by ingest, so drop
+	// them; empty keys are skipped. Guard on the map's actual size (see attributes
+	// above) so truncated-key collisions cannot stop the loop short.
 	for (const auto& Pair : Metrics)
 	{
-		if (MetricCount >= FramedashConstants::MaxMetricPairs) break;
-		Evt.Metrics.Add(Pair.Key, Pair.Value);
-		++MetricCount;
+		if (Evt.Metrics.Num() >= FramedashConstants::MaxMetricPairs) break;
+		if (Pair.Key.IsEmpty()) continue;
+		if (!FMath::IsFinite(Pair.Value)) continue;
+		Evt.Metrics.Add(TruncateString(Pair.Key, FramedashConstants::MaxMetricKeyLength), Pair.Value);
+	}
+
+	if (bCaptureCameraRotation)
+	{
+		CaptureCameraRotation(Evt);
 	}
 
 	EventBuffer->Enqueue(MoveTemp(Evt));
@@ -364,7 +430,7 @@ void UFramedashSubsystem::Flush()
 			const int32 PersistedFailureCount = FMath::Clamp(PersistedEventCount - FailedEventOffset, 0, FailedEvents.Num());
 			if (PersistedFailureCount > 0)
 			{
-				FailedEvents.RemoveAt(0, PersistedFailureCount, EAllowShrinking::No);
+				FailedEvents.RemoveAt(0, PersistedFailureCount, FRAMEDASH_ALLOW_SHRINKING_NO);
 			}
 			PersistFailedEvents(MoveTemp(FailedEvents));
 		},
@@ -509,7 +575,7 @@ void UFramedashSubsystem::PersistFailedEvents(TArray<FFramedashEvent>&& Events)
 		{
 			if (FailurePersistenceTasks[Index].IsReady())
 			{
-				FailurePersistenceTasks.RemoveAtSwap(Index, 1, EAllowShrinking::No);
+				FailurePersistenceTasks.RemoveAtSwap(Index, 1, FRAMEDASH_ALLOW_SHRINKING_NO);
 			}
 		}
 		FailurePersistenceTasks.Add(MoveTemp(PersistenceTask));
@@ -537,10 +603,75 @@ void UFramedashSubsystem::WaitForFailurePersistenceTasks()
 	}
 }
 
-void UFramedashSubsystem::Tick(float DeltaTime)
+void UFramedashSubsystem::UpdateCachedCameraRotation()
 {
-	TimeSinceLastFlush += DeltaTime;
-	TimeSinceLastHeartbeat += DeltaTime;
+	// Called from Tick (game thread), where reading the World / PlayerController /
+	// PlayerCameraManager UObjects is safe. The result is cached so each tracked
+	// event is stamped with the latest sample without re-reading these UObjects.
+	float NewYaw = 0.0f;
+	float NewPitch = 0.0f;
+	bool bHas = false;
+
+	if (!IsRunningDedicatedServer())
+	{
+		// Dedicated servers / headless have no local view to sample.
+		const UWorld* World = GetWorld();
+		const APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+		if (IsValid(PC) && IsValid(PC->PlayerCameraManager)) // IsValid: not pending-kill/GC
+		{
+			const FRotator ViewRotation = PC->PlayerCameraManager->GetCameraRotation();
+			// Finite-only: a non-finite component clears the cache (both unset).
+			if (FMath::IsFinite(ViewRotation.Yaw) && FMath::IsFinite(ViewRotation.Pitch))
+			{
+				NewYaw = Framedash::NormalizeYawDegrees(ViewRotation.Yaw);
+				NewPitch = Framedash::NormalizePitchDegrees(ViewRotation.Pitch);
+				bHas = true;
+			}
+		}
+	}
+
+	FScopeLock Lock(&CameraRotationCS);
+	bHasCachedCamera = bHas;
+	CachedCameraYaw = NewYaw;
+	CachedCameraPitch = NewPitch;
+}
+
+void UFramedashSubsystem::CaptureCameraRotation(FFramedashEvent& Evt) const
+{
+	// Reads the snapshot cached on the game thread by UpdateCachedCameraRotation, so
+	// it touches no game-thread-only UObjects. Both fields are set together or unset.
+	FScopeLock Lock(&CameraRotationCS);
+	if (bHasCachedCamera)
+	{
+		Evt.CameraYaw = CachedCameraYaw;
+		Evt.CameraPitch = CachedCameraPitch;
+	}
+}
+
+void UFramedashSubsystem::Tick(float /*DeltaTime*/)
+{
+	// Drive the flush/heartbeat cadence from REAL wall-clock time, not the
+	// engine-scaled DeltaTime argument: DeltaTime is 0 while paused (we tick
+	// when paused now) and is stretched/compressed by time dilation, which would
+	// stall or skew the 30s flush and 10s heartbeat. This mirrors the Godot SDK,
+	// which measures Time.GetTicksUsec() instead of the scaled _Process delta.
+	const double NowSeconds = FPlatformTime::Seconds();
+	// LastTickSeconds is seeded to now in InitializeInternal, so this is always a
+	// real elapsed delta -- no first-call branch needed.
+	// FMath::Max guards a non-monotonic clock (NowSeconds < LastTickSeconds): a
+	// backwards jump must not subtract from the cadence timers.
+	const float RealDelta = FMath::Max(0.0f, static_cast<float>(NowSeconds - LastTickSeconds));
+	LastTickSeconds = NowSeconds;
+
+	TimeSinceLastFlush += RealDelta;
+	TimeSinceLastHeartbeat += RealDelta;
+
+	// Refresh the cached camera rotation on the game thread so each tracked event
+	// (including the heartbeat below) stamps a fresh snapshot.
+	if (bCaptureCameraRotation)
+	{
+		UpdateCachedCameraRotation();
+	}
 
 	// Periodic performance heartbeat — auto-collects metrics without game code
 	if (TimeSinceLastHeartbeat >= FramedashConstants::HeartbeatIntervalSeconds)
@@ -569,6 +700,7 @@ FString UFramedashSubsystem::GetSessionId() const
 
 FString UFramedashSubsystem::TruncateString(const FString& Input, int32 MaxLength)
 {
-	if (Input.Len() <= MaxLength) return Input;
-	return Input.Left(MaxLength);
+	// Count UTF-16 code units (what ingest validates), not FString elements, so the
+	// clamp is correct on both 2-byte and 4-byte TCHAR builds. See FramedashStringUtil.h.
+	return Framedash::TruncateToUtf16Units(Input, MaxLength);
 }

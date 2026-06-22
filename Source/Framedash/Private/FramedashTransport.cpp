@@ -2,6 +2,7 @@
 
 #include "FramedashTransport.h"
 #include "Framedash.h"
+#include "FramedashBatchPolicy.h"
 #include "FramedashEndpointSecurity.h"
 #include "FramedashProtobufSerializer.h"
 #include "FramedashRetryPolicy.h"
@@ -12,7 +13,12 @@
 #include "Misc/Compression.h"
 #include "Misc/EngineVersionComparison.h"
 #include "Async/Async.h"
-#if UE_VERSION_NEWER_THAN_OR_EQUAL(5, 4, 0)
+#include "Containers/Ticker.h" // FTSTicker / FTickerDelegate (transitively included on 5.6, not 5.3-5.5)
+// UE_VERSION_NEWER_THAN_OR_EQUAL was only added in UE 5.6; UE_VERSION_OLDER_THAN
+// exists on every 5.x, so the ">= 5.4" guards below use its complement to stay
+// buildable on 5.3-5.5 (BuildPlugin compiles with -WarningsAsErrors, so an
+// undefined identifier in an #if is a fatal error, not a warning).
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
 #include "Tasks/Task.h"
 #endif
 
@@ -92,6 +98,20 @@ Framedash::FTelemetryEvent ToSerializerEvent(const FFramedashEvent& Event)
 	return Out;
 }
 
+// Count decoded entries in a batch the way the ingest consumer does:
+// one per event, plus one per attribute entry, plus one per metric entry.
+// Mirrors BatchPolicy.CountDecodedEntries in the Unity SDK.
+int64 CountDecodedEntries(const TArray<FFramedashEvent>& Events)
+{
+	int64 Total = Events.Num();
+	for (const FFramedashEvent& Evt : Events)
+	{
+		Total += Evt.Attributes.Num();
+		Total += Evt.Metrics.Num();
+	}
+	return Total;
+}
+
 FFramedashBatchFailureHandler MakeOffsetFailureHandler(const FFramedashBatchFailureHandler& Parent, int32 BaseOffset)
 {
 	return [Parent, BaseOffset](TArray<FFramedashEvent>&& FailedEvents, int32 FailureOffset)
@@ -123,6 +143,70 @@ FFramedashTransport::~FFramedashTransport()
 	AliveFlag->store(false, std::memory_order_release);
 }
 
+// -- Private helper -------------------------------------------------------
+
+// INVARIANT: the shared pending-children counter below is a plain int32 (not
+// atomic). This is safe only because every close callback fires on the game
+// thread (HTTP completion delegates and the payload-split AsyncTask both hop
+// back to it). If a future transport backend invokes closes off-thread, the
+// counter must become atomic.
+void FFramedashTransport::SplitBatchAndResend(
+	TArray<FFramedashEvent> Events,
+	FFramedashBatchFailureHandler OnTransientFailure,
+	FFramedashBatchClosedHandler OnClosed)
+{
+	const int32 TotalCount = Events.Num();
+	const int32 Mid = TotalCount / 2;
+
+	TArray<FFramedashEvent> FirstHalf;
+	FirstHalf.Reserve(Mid);
+	for (int32 Index = 0; Index < Mid; ++Index)
+	{
+		FirstHalf.Add(MoveTemp(Events[Index]));
+	}
+
+	TArray<FFramedashEvent> SecondHalf;
+	SecondHalf.Reserve(TotalCount - Mid);
+	for (int32 Index = Mid; Index < TotalCount; ++Index)
+	{
+		SecondHalf.Add(MoveTemp(Events[Index]));
+	}
+
+	// Shared counter: parent OnClosed fires only after BOTH halves have closed.
+	// The DeliveredLeading semantic: report contiguous leading delivered events
+	// (first-half count + second-half leading, or just first-half leading if the
+	// first half was not fully delivered).
+	TSharedRef<int32, ESPMode::ThreadSafe> PendingChildren = MakeShared<int32, ESPMode::ThreadSafe>(2);
+	TSharedRef<int32, ESPMode::ThreadSafe> FirstDeliveredLeading = MakeShared<int32, ESPMode::ThreadSafe>(0);
+	TSharedRef<int32, ESPMode::ThreadSafe> SecondDeliveredLeading = MakeShared<int32, ESPMode::ThreadSafe>(0);
+
+	const int32 FirstHalfCount = FirstHalf.Num();
+	auto CloseParentIfDone = [PendingChildren, FirstDeliveredLeading, SecondDeliveredLeading, FirstHalfCount, OnClosed]()
+	{
+		--(*PendingChildren);
+		if (*PendingChildren == 0 && OnClosed)
+		{
+			const int32 DeliveredLeading = *FirstDeliveredLeading >= FirstHalfCount
+				? FirstHalfCount + *SecondDeliveredLeading
+				: *FirstDeliveredLeading;
+			OnClosed(DeliveredLeading);
+		}
+	};
+	FFramedashBatchClosedHandler FirstClosed = [FirstDeliveredLeading, CloseParentIfDone](int32 DeliveredLeading)
+	{
+		*FirstDeliveredLeading = DeliveredLeading;
+		CloseParentIfDone();
+	};
+	FFramedashBatchClosedHandler SecondClosed = [SecondDeliveredLeading, CloseParentIfDone](int32 DeliveredLeading)
+	{
+		*SecondDeliveredLeading = DeliveredLeading;
+		CloseParentIfDone();
+	};
+
+	SendBatch(MoveTemp(FirstHalf), MakeOffsetFailureHandler(OnTransientFailure, 0), FirstClosed);
+	SendBatch(MoveTemp(SecondHalf), MakeOffsetFailureHandler(OnTransientFailure, FirstHalfCount), SecondClosed);
+}
+
 // -- Public API -----------------------------------------------------------
 
 void FFramedashTransport::SendBatch(
@@ -143,55 +227,22 @@ void FFramedashTransport::SendBatch(
 	UE_LOG(LogFramedash, Log, TEXT("SendBatch: %d events -> %s"), Events.Num(), *EndpointUrl);
 #endif
 
+	// Check server per-request wire caps (event count AND decoded-entry count =
+	// events + all attribute/metric map entries) before the per-flush batch-size
+	// check. The consumer rejects an over-cap batch wholesale, so a drain larger
+	// than a cap must be split here, before serialization. Mirrors Unity SDK
+	// TransportLayer.SendBatch BatchPolicy.ExceedsWireCaps placement.
+	if (Framedash::FBatchPolicy::ExceedsWireCaps(Events.Num(), CountDecodedEntries(Events)))
+	{
+		UE_LOG(LogFramedash, Log, TEXT("Batch exceeds wire caps. Splitting %d events."), Events.Num());
+		SplitBatchAndResend(MoveTemp(Events), MoveTemp(OnTransientFailure), MoveTemp(OnClosed));
+		return;
+	}
+
 	if (Events.Num() > FramedashConstants::MaxBatchSize)
 	{
-		const int32 Mid = Events.Num() / 2;
-		TArray<FFramedashEvent> FirstHalf;
-		FirstHalf.Reserve(Mid);
-		for (int32 Index = 0; Index < Mid; ++Index)
-		{
-			FirstHalf.Add(MoveTemp(Events[Index]));
-		}
-
-		TArray<FFramedashEvent> SecondHalf;
-		SecondHalf.Reserve(Events.Num() - Mid);
-		for (int32 Index = Mid; Index < Events.Num(); ++Index)
-		{
-			SecondHalf.Add(MoveTemp(Events[Index]));
-		}
-
-		UE_LOG(LogFramedash, Log, TEXT("Batch too large. Splitting batch %d -> %d + %d."),
-			Events.Num(), FirstHalf.Num(), SecondHalf.Num());
-
-		TSharedRef<int32, ESPMode::ThreadSafe> PendingChildren = MakeShared<int32, ESPMode::ThreadSafe>(2);
-		TSharedRef<int32, ESPMode::ThreadSafe> FirstDeliveredLeading = MakeShared<int32, ESPMode::ThreadSafe>(0);
-		TSharedRef<int32, ESPMode::ThreadSafe> SecondDeliveredLeading = MakeShared<int32, ESPMode::ThreadSafe>(0);
-
-		auto CloseParentIfDone = [PendingChildren, FirstDeliveredLeading, SecondDeliveredLeading, FirstHalfCount = FirstHalf.Num(), OnClosed]()
-		{
-			--(*PendingChildren);
-			if (*PendingChildren == 0 && OnClosed)
-			{
-				const int32 DeliveredLeading = *FirstDeliveredLeading >= FirstHalfCount
-					? FirstHalfCount + *SecondDeliveredLeading
-					: *FirstDeliveredLeading;
-				OnClosed(DeliveredLeading);
-			}
-		};
-		FFramedashBatchClosedHandler FirstClosed = [FirstDeliveredLeading, CloseParentIfDone](int32 DeliveredLeading)
-		{
-			*FirstDeliveredLeading = DeliveredLeading;
-			CloseParentIfDone();
-		};
-		FFramedashBatchClosedHandler SecondClosed = [SecondDeliveredLeading, CloseParentIfDone](int32 DeliveredLeading)
-		{
-			*SecondDeliveredLeading = DeliveredLeading;
-			CloseParentIfDone();
-		};
-
-		const int32 FirstHalfCount = FirstHalf.Num();
-		SendBatch(MoveTemp(FirstHalf), MakeOffsetFailureHandler(OnTransientFailure, 0), FirstClosed);
-		SendBatch(MoveTemp(SecondHalf), MakeOffsetFailureHandler(OnTransientFailure, FirstHalfCount), SecondClosed);
+		UE_LOG(LogFramedash, Log, TEXT("Batch too large. Splitting %d events."), Events.Num());
+		SplitBatchAndResend(MoveTemp(Events), MoveTemp(OnTransientFailure), MoveTemp(OnClosed));
 		return;
 	}
 
@@ -243,60 +294,14 @@ void FFramedashTransport::SendBatch(
 		}
 
 		// If payload exceeds max size, split the batch on the game thread
-		// (SendBatch accesses members, so it must run on the game thread)
+		// (SendBatch/SplitBatchAndResend access members, must run on game thread).
 		if (CompressedBytes.Num() > FramedashConstants::MaxPayloadBytes && Events.Num() > 1)
 		{
 			AsyncTask(ENamedThreads::GameThread, [this, AliveFlagCopy, Events = MoveTemp(Events), OnTransientFailure, OnClosed]() mutable
 			{
 				if (!AliveFlagCopy->load(std::memory_order_acquire)) return;
-
-				const int32 Mid = Events.Num() / 2;
-				TArray<FFramedashEvent> FirstHalf;
-				FirstHalf.Reserve(Mid);
-				for (int32 Index = 0; Index < Mid; ++Index)
-				{
-					FirstHalf.Add(MoveTemp(Events[Index]));
-				}
-
-				TArray<FFramedashEvent> SecondHalf;
-				SecondHalf.Reserve(Events.Num() - Mid);
-				for (int32 Index = Mid; Index < Events.Num(); ++Index)
-				{
-					SecondHalf.Add(MoveTemp(Events[Index]));
-				}
-
-				UE_LOG(LogFramedash, Log, TEXT("Payload too large. Splitting batch %d -> %d + %d."),
-					Events.Num(), FirstHalf.Num(), SecondHalf.Num());
-
-				TSharedRef<int32, ESPMode::ThreadSafe> PendingChildren = MakeShared<int32, ESPMode::ThreadSafe>(2);
-				TSharedRef<int32, ESPMode::ThreadSafe> FirstDeliveredLeading = MakeShared<int32, ESPMode::ThreadSafe>(0);
-				TSharedRef<int32, ESPMode::ThreadSafe> SecondDeliveredLeading = MakeShared<int32, ESPMode::ThreadSafe>(0);
-
-				auto CloseParentIfDone = [PendingChildren, FirstDeliveredLeading, SecondDeliveredLeading, FirstHalfCount = FirstHalf.Num(), OnClosed]()
-				{
-					--(*PendingChildren);
-					if (*PendingChildren == 0 && OnClosed)
-					{
-						const int32 DeliveredLeading = *FirstDeliveredLeading >= FirstHalfCount
-							? FirstHalfCount + *SecondDeliveredLeading
-							: *FirstDeliveredLeading;
-						OnClosed(DeliveredLeading);
-					}
-				};
-				FFramedashBatchClosedHandler FirstClosed = [FirstDeliveredLeading, CloseParentIfDone](int32 DeliveredLeading)
-				{
-					*FirstDeliveredLeading = DeliveredLeading;
-					CloseParentIfDone();
-				};
-				FFramedashBatchClosedHandler SecondClosed = [SecondDeliveredLeading, CloseParentIfDone](int32 DeliveredLeading)
-				{
-					*SecondDeliveredLeading = DeliveredLeading;
-					CloseParentIfDone();
-				};
-
-				const int32 FirstHalfCount = FirstHalf.Num();
-				SendBatch(MoveTemp(FirstHalf), MakeOffsetFailureHandler(OnTransientFailure, 0), FirstClosed);
-				SendBatch(MoveTemp(SecondHalf), MakeOffsetFailureHandler(OnTransientFailure, FirstHalfCount), SecondClosed);
+				UE_LOG(LogFramedash, Log, TEXT("Payload too large. Splitting %d events."), Events.Num());
+				SplitBatchAndResend(MoveTemp(Events), MoveTemp(OnTransientFailure), MoveTemp(OnClosed));
 			});
 			return;
 		}
@@ -317,7 +322,7 @@ void FFramedashTransport::SendBatch(
 		});
 	};
 
-#if UE_VERSION_NEWER_THAN_OR_EQUAL(5, 4, 0)
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
 	UE::Tasks::Launch(TEXT("Framedash::SerializeAndSend"), MoveTemp(TaskBody),
 		UE::Tasks::ETaskPriority::BackgroundNormal);
 #else
@@ -391,12 +396,16 @@ void FFramedashTransport::SendHttpRequest(
 
 	Request->SetURL(EndpointUrl);
 	Request->SetVerb(TEXT("POST"));
-	// SECURITY FOLLOW-UP (UE build verification): the platform HTTP backend
-	// (libcurl) follows 3xx redirects by default and would re-send X-API-Key to
-	// the redirect target -- a credential leak if a trusted endpoint is
-	// compromised/MITM'd. FRetryPolicy already fails any 3xx that SURFACES, but
-	// IHttpRequest has no portable redirect toggle, so following must be disabled
-	// at the backend during the UE build pass (Unity already sets redirectLimit=0).
+	// SECURITY (verified against the UE 5.x curl backend): the platform HTTP
+	// backend (libcurl) sets CURLOPT_FOLLOWLOCATION and follows 3xx redirects,
+	// re-sending this X-API-Key header to the redirect target -- a credential leak
+	// if a trusted endpoint is compromised/MITM'd. IHttpRequest exposes no portable
+	// per-request toggle to disable following (unlike Unity's redirectLimit = 0),
+	// so prevention is not possible at the SDK layer. Instead the completion
+	// handler detects a cross-origin landing via GetEffectiveURL() (UE 5.4+) and
+	// drops the batch without persisting (see IsCrossOriginRedirect). Realistic
+	// risk stays low on the HTTPS-only default: TLS authenticates the endpoint, so
+	// an off-path attacker cannot inject the redirect.
 	Request->SetHeader(TEXT("Content-Type"), TEXT("application/x-protobuf"));
 	if (bIsCompressed)
 	{
@@ -425,6 +434,40 @@ void FFramedashTransport::SendHttpRequest(
 		// so the policy treats it as a retryable network error.
 		const bool bHasResponse = bSuccess && Resp.IsValid();
 		const int32 StatusCode = bHasResponse ? Resp->GetResponseCode() : 0;
+
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
+		// Defense in depth against a credential-leaking redirect. The platform HTTP
+		// backend (libcurl) follows 3xx redirects (CURLOPT_FOLLOWLOCATION) and
+		// re-sends this X-API-Key header to the redirect target, with no portable
+		// per-request toggle to disable it (see SendHttpRequest). The effective URL
+		// (after redirects) is read from the response, or from the request when the
+		// redirected hop then failed without a usable response -- so a
+		// redirect-then-timeout still fails closed here instead of falling through
+		// to a retry/offline-replay that re-sends the key to the same target. A
+		// cross-origin landing drops the batch WITHOUT persisting and logs a
+		// security error instead of trusting the redirect target's response.
+		// Limitations: only the FINAL effective URL is visible, so a chain that
+		// leaves and returns to the configured origin is not detectable (UE exposes
+		// no redirect-hop list), and the one-time header transmission the redirect
+		// already performed cannot be undone. Unity prevents the follow outright
+		// (redirectLimit = 0); UE has no equivalent. IHttpBase::GetEffectiveURL
+		// exists only on UE 5.4+, hence the version guard.
+		const FString EffectiveUrl = bHasResponse
+			? Resp->GetEffectiveURL()
+			: (Req.IsValid() ? Req->GetEffectiveURL() : FString());
+		if (!EffectiveUrl.IsEmpty() && EndpointUrl != EffectiveUrl &&
+			Framedash::IsCrossOriginRedirect(ToUtf8String(EndpointUrl), ToUtf8String(EffectiveUrl)))
+		{
+			UE_LOG(LogFramedash, Error,
+				TEXT("Endpoint redirected across origin (%s -> %s); X-API-Key may be exposed. Dropping %d event(s) without retry."),
+				*EndpointUrl, *EffectiveUrl, Events->Num());
+			if (OnClosed)
+			{
+				OnClosed(Events->Num());
+			}
+			return;
+		}
+#endif
 
 		// Reuse the engine-independent retry policy while preserving the
 		// original events for offline persistence and reactive 413 splitting.
@@ -478,53 +521,13 @@ void FFramedashTransport::SendHttpRequest(
 		}
 		case Framedash::ERetryAction::SplitBatch:
 		{
-			const int32 Mid = Events->Num() / 2;
-			TArray<FFramedashEvent> FirstHalf;
-			FirstHalf.Reserve(Mid);
-			for (int32 Index = 0; Index < Mid; ++Index)
-			{
-				FirstHalf.Add(MoveTemp((*Events)[Index]));
-			}
-
-			TArray<FFramedashEvent> SecondHalf;
-			SecondHalf.Reserve(Events->Num() - Mid);
-			for (int32 Index = Mid; Index < Events->Num(); ++Index)
-			{
-				SecondHalf.Add(MoveTemp((*Events)[Index]));
-			}
-
-			UE_LOG(LogFramedash, Log, TEXT("HTTP 413. Splitting batch %d -> %d + %d."),
-				Events->Num(), FirstHalf.Num(), SecondHalf.Num());
-
-			TSharedRef<int32, ESPMode::ThreadSafe> PendingChildren = MakeShared<int32, ESPMode::ThreadSafe>(2);
-			TSharedRef<int32, ESPMode::ThreadSafe> FirstDeliveredLeading = MakeShared<int32, ESPMode::ThreadSafe>(0);
-			TSharedRef<int32, ESPMode::ThreadSafe> SecondDeliveredLeading = MakeShared<int32, ESPMode::ThreadSafe>(0);
-
-			auto CloseParentIfDone = [PendingChildren, FirstDeliveredLeading, SecondDeliveredLeading, FirstHalfCount = FirstHalf.Num(), OnClosed]()
-			{
-				--(*PendingChildren);
-				if (*PendingChildren == 0 && OnClosed)
-				{
-					const int32 DeliveredLeading = *FirstDeliveredLeading >= FirstHalfCount
-						? FirstHalfCount + *SecondDeliveredLeading
-						: *FirstDeliveredLeading;
-					OnClosed(DeliveredLeading);
-				}
-			};
-			FFramedashBatchClosedHandler FirstClosed = [FirstDeliveredLeading, CloseParentIfDone](int32 DeliveredLeading)
-			{
-				*FirstDeliveredLeading = DeliveredLeading;
-				CloseParentIfDone();
-			};
-			FFramedashBatchClosedHandler SecondClosed = [SecondDeliveredLeading, CloseParentIfDone](int32 DeliveredLeading)
-			{
-				*SecondDeliveredLeading = DeliveredLeading;
-				CloseParentIfDone();
-			};
-
-			const int32 FirstHalfCount = FirstHalf.Num();
-			SendBatch(MoveTemp(FirstHalf), MakeOffsetFailureHandler(OnTransientFailure, 0), FirstClosed);
-			SendBatch(MoveTemp(SecondHalf), MakeOffsetFailureHandler(OnTransientFailure, FirstHalfCount), SecondClosed);
+			// Materialize the TSharedRef<TArray> into a local TArray so the
+			// helper signature (takes TArray by value) can move from it. The
+			// handlers are const captures of this non-mutable completion lambda,
+			// so they must be copied (MoveTemp on a const object fails to compile).
+			TArray<FFramedashEvent> LocalEvents(MoveTemp(*Events));
+			UE_LOG(LogFramedash, Log, TEXT("HTTP 413. Splitting %d events."), LocalEvents.Num());
+			SplitBatchAndResend(MoveTemp(LocalEvents), OnTransientFailure, OnClosed);
 			return;
 		}
 		case Framedash::ERetryAction::Fail:

@@ -3,6 +3,7 @@
 #include "FramedashProtobufSerializer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
 
@@ -183,13 +184,14 @@ bool EncodeEventsCb(pb_ostream_t* Stream, const pb_field_t* Field, void* const* 
 		PbEvent.engine_version.funcs.encode = &EncodeStringCb;
 		PbEvent.engine_version.arg = &EngineVersionCtx;
 
-		if (Evt.CameraYaw.has_value())
+		// camera_yaw/camera_pitch are written together or not at all (ingest
+		// rejects a present-mismatch) and only when both are finite (NaN/Inf
+		// rejected) -- the single enforcement point for those wire invariants.
+		if (Evt.CameraYaw.has_value() && Evt.CameraPitch.has_value() &&
+			std::isfinite(*Evt.CameraYaw) && std::isfinite(*Evt.CameraPitch))
 		{
 			PbEvent.has_camera_yaw = true;
 			PbEvent.camera_yaw = *Evt.CameraYaw;
-		}
-		if (Evt.CameraPitch.has_value())
-		{
 			PbEvent.has_camera_pitch = true;
 			PbEvent.camera_pitch = *Evt.CameraPitch;
 		}

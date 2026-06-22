@@ -7,5 +7,6 @@ UFramedashSettings::UFramedashSettings()
 	, SamplingRate(1.0f)
 	, bAutoInitialize(true)
 	, bEnableOfflineQueue(true)
+	, bCaptureCameraRotation(true)
 {
 }

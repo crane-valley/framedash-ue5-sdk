@@ -45,6 +45,10 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Persistence", meta=(DisplayName="Enable Offline Queue"))
 	bool bEnableOfflineQueue;
 
+	/** If true, the SDK records the local player's camera yaw/pitch on each event (for direction heatmaps). */
+	UPROPERTY(Config, EditAnywhere, Category="Capture", meta=(DisplayName="Capture Camera Rotation"))
+	bool bCaptureCameraRotation;
+
 	/** Category path in Project Settings. */
 	virtual FName GetCategoryName() const override { return FName(TEXT("Plugins")); }
 };

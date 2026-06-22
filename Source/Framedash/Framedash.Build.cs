@@ -9,8 +9,21 @@ public class Framedash : ModuleRules
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
-		// nanopb uses C99 features and may trigger warnings in MSVC
+		// nanopb uses C99 features that can trip the compiler's "undefined
+		// identifier" preprocessor warning (C4668 on MSVC, -Wundef on Clang/GCC).
+		// The API to silence it moved across engine releases, so pick the
+		// version-appropriate one to keep the plugin buildable on UE 5.3 through
+		// the current release without deprecation warnings:
+		//   UE 5.6+  : CppCompileWarningSettings.UndefinedIdentifierWarningLevel
+		//   UE 5.5   : ModuleRules.UndefinedIdentifierWarningLevel
+		//   UE 5.3-4 : bEnableUndefinedIdentifierWarnings
+#if UE_5_6_OR_LATER
 		CppCompileWarningSettings.UndefinedIdentifierWarningLevel = WarningLevel.Off;
+#elif UE_5_5_OR_LATER
+		UndefinedIdentifierWarningLevel = WarningLevel.Off;
+#else
+		bEnableUndefinedIdentifierWarnings = false;
+#endif
 
 		string ThirdPartyPath = Path.Combine(ModuleDirectory, "Private", "ThirdParty");
 		string ProtoPath = Path.Combine(ModuleDirectory, "Private", "Proto");

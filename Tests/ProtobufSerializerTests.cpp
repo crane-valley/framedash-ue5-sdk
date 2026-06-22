@@ -8,6 +8,8 @@ extern "C"
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 namespace
 {
 
@@ -262,6 +264,43 @@ TEST(ProtobufSerializer, SerializeTelemetryBatch_OmitsUnsetOptionalFields)
 	EXPECT_FALSE(Output[0].CameraYaw.has_value());
 	EXPECT_FALSE(Output[0].CameraPitch.has_value());
 	EXPECT_EQ(Output[0].Source, Framedash::ETelemetrySource::Automated);
+}
+
+TEST(ProtobufSerializer, SerializeTelemetryBatch_CameraPresentMismatch_OmitsBoth)
+{
+	// both-or-neither: only one of yaw/pitch set must drop both, since ingest
+	// rejects a present-mismatch.
+	Framedash::FTelemetryEvent Input;
+	Input.EventName = "cam_partial";
+	Input.TimestampUs = 1;
+	Input.CameraYaw = 90.0f;
+	// CameraPitch intentionally left unset.
+
+	std::vector<uint8_t> Bytes;
+	ASSERT_TRUE(Framedash::SerializeTelemetryBatch({Input}, Bytes));
+
+	const std::vector<Framedash::FTelemetryEvent> Output = DecodeTelemetryBatch(Bytes);
+	ASSERT_EQ(Output.size(), 1u);
+	EXPECT_FALSE(Output[0].CameraYaw.has_value());
+	EXPECT_FALSE(Output[0].CameraPitch.has_value());
+}
+
+TEST(ProtobufSerializer, SerializeTelemetryBatch_CameraNonFinite_OmitsBoth)
+{
+	// finite-only: a NaN/Inf component must drop both fields.
+	Framedash::FTelemetryEvent Input;
+	Input.EventName = "cam_nan";
+	Input.TimestampUs = 1;
+	Input.CameraYaw = std::numeric_limits<float>::quiet_NaN();
+	Input.CameraPitch = 10.0f;
+
+	std::vector<uint8_t> Bytes;
+	ASSERT_TRUE(Framedash::SerializeTelemetryBatch({Input}, Bytes));
+
+	const std::vector<Framedash::FTelemetryEvent> Output = DecodeTelemetryBatch(Bytes);
+	ASSERT_EQ(Output.size(), 1u);
+	EXPECT_FALSE(Output[0].CameraYaw.has_value());
+	EXPECT_FALSE(Output[0].CameraPitch.has_value());
 }
 
 TEST(ProtobufSerializer, SerializeTelemetryBatch_EmptyBatch_EncodesSuccessfully)

@@ -1,9 +1,11 @@
 // Copyright Crane Valley. All Rights Reserved.
 //
-// Standalone unit tests for Framedash::ExtractUrlHost and IsEndpointSecure.
-// Verifies the loopback HTTPS exemption matches the parsed host exactly and
-// rejects the look-alike / userinfo / fragment bypasses that an unanchored
-// substring check (the previous implementation) would have accepted. Runs
+// Standalone unit tests for Framedash::ExtractUrlHost, IsEndpointSecure, and
+// IsCrossOriginRedirect. Verifies the loopback HTTPS exemption matches the parsed
+// host exactly and rejects the look-alike / userinfo / fragment bypasses that an
+// unanchored substring check (the previous implementation) would have accepted,
+// and that the redirect cross-origin detection compares full origins (scheme +
+// host + port) while failing open on empty/unparseable effective URLs. Runs
 // without an UnrealEditor build.
 
 #include "FramedashEndpointSecurity.h"
@@ -11,6 +13,7 @@
 #include <gtest/gtest.h>
 
 using Framedash::ExtractUrlHost;
+using Framedash::IsCrossOriginRedirect;
 using Framedash::IsEndpointSecure;
 
 // -- ExtractUrlHost ----------------------------------------------------
@@ -191,4 +194,134 @@ TEST(IsEndpointSecure, HttpsLoopbackLookAlikeStillAllowedViaHttps)
 {
 	// Not a loopback host, but HTTPS keeps the key encrypted -> allowed.
 	EXPECT_TRUE(IsEndpointSecure("https://localhost.attacker.com/v1/events"));
+}
+
+// -- IsCrossOriginRedirect: same origin (no flag) ----------------------
+
+TEST(IsCrossOriginRedirect, IdenticalUrlIsSameOrigin)
+{
+	EXPECT_FALSE(IsCrossOriginRedirect(
+		"https://ingest.framedash.dev/v1/events",
+		"https://ingest.framedash.dev/v1/events"));
+}
+
+TEST(IsCrossOriginRedirect, SameOriginDifferentPathIsSameOrigin)
+{
+	// A redirect that stays on the configured host/scheme/port is not a leak.
+	EXPECT_FALSE(IsCrossOriginRedirect(
+		"https://ingest.framedash.dev/v1/events",
+		"https://ingest.framedash.dev/v2/events?retry=1"));
+}
+
+TEST(IsCrossOriginRedirect, DefaultPortMatchesExplicitPort)
+{
+	// https default port 443 normalizes to an explicit :443 -> same origin.
+	EXPECT_FALSE(IsCrossOriginRedirect(
+		"https://ingest.framedash.dev/v1/events",
+		"https://ingest.framedash.dev:443/v1/events"));
+	EXPECT_FALSE(IsCrossOriginRedirect(
+		"http://localhost:80/v1/events",
+		"http://localhost/v1/events"));
+}
+
+TEST(IsCrossOriginRedirect, HostCaseIsNormalized)
+{
+	EXPECT_FALSE(IsCrossOriginRedirect(
+		"https://ingest.framedash.dev/v1/events",
+		"https://INGEST.Framedash.DEV/v1/events"));
+}
+
+TEST(IsCrossOriginRedirect, Ipv6SameOrigin)
+{
+	EXPECT_FALSE(IsCrossOriginRedirect(
+		"https://[2001:db8::1]:8443/v1/events",
+		"https://[2001:db8::1]:8443/other"));
+}
+
+// -- IsCrossOriginRedirect: fail open (no flag) ------------------------
+
+TEST(IsCrossOriginRedirect, EmptyEffectiveUrlIsNotFlagged)
+{
+	// A backend that does not populate the effective URL must never drop traffic.
+	EXPECT_FALSE(IsCrossOriginRedirect("https://ingest.framedash.dev/v1/events", ""));
+}
+
+TEST(IsCrossOriginRedirect, UnparseableEffectiveUrlIsNotFlagged)
+{
+	// No scheme/host -> cannot reason about origin -> fail open.
+	EXPECT_FALSE(IsCrossOriginRedirect("https://ingest.framedash.dev/v1/events", "not a url"));
+	EXPECT_FALSE(IsCrossOriginRedirect("https://ingest.framedash.dev/v1/events", "https://"));
+}
+
+// -- IsCrossOriginRedirect: cross origin (flagged) ---------------------
+
+TEST(IsCrossOriginRedirect, DifferentHostIsCrossOrigin)
+{
+	EXPECT_TRUE(IsCrossOriginRedirect(
+		"https://ingest.framedash.dev/v1/events",
+		"https://evil.example/v1/events"));
+}
+
+TEST(IsCrossOriginRedirect, DifferentSchemeIsCrossOrigin)
+{
+	// An https -> http downgrade redirect would expose the key in cleartext.
+	EXPECT_TRUE(IsCrossOriginRedirect(
+		"https://ingest.framedash.dev/v1/events",
+		"http://ingest.framedash.dev/v1/events"));
+}
+
+TEST(IsCrossOriginRedirect, DifferentPortIsCrossOrigin)
+{
+	EXPECT_TRUE(IsCrossOriginRedirect(
+		"https://ingest.framedash.dev/v1/events",
+		"https://ingest.framedash.dev:8443/v1/events"));
+}
+
+TEST(IsCrossOriginRedirect, SiblingSubdomainIsCrossOrigin)
+{
+	// Strict origin: a different host under the same registrable domain still
+	// crosses a trust boundary for the pinned endpoint.
+	EXPECT_TRUE(IsCrossOriginRedirect(
+		"https://ingest.framedash.dev/v1/events",
+		"https://collector.framedash.dev/v1/events"));
+}
+
+TEST(IsCrossOriginRedirect, Ipv6DifferentHostIsCrossOrigin)
+{
+	EXPECT_TRUE(IsCrossOriginRedirect(
+		"https://[2001:db8::1]/v1/events",
+		"https://[2001:db8::2]/v1/events"));
+}
+
+// -- IsCrossOriginRedirect: parser-differential effective URLs fail closed ---
+
+TEST(IsCrossOriginRedirect, BackslashUserinfoEffectiveUrlFailsClosed)
+{
+	// libcurl would split the host at the last '@' and connect to evil.example,
+	// while the WHATWG host parser stops at '\' and reads the configured host --
+	// a missed leak. The '@' / '\' guard flags it as cross origin.
+	EXPECT_TRUE(IsCrossOriginRedirect(
+		"https://ingest.framedash.dev/v1/events",
+		"https://ingest.framedash.dev\\@evil.example/v1/events"));
+	EXPECT_TRUE(IsCrossOriginRedirect(
+		"https://ingest.framedash.dev/v1/events",
+		"https://ingest.framedash.dev@evil.example/v1/events"));
+}
+
+TEST(IsCrossOriginRedirect, ControlCharEffectiveUrlFailsClosed)
+{
+	std::string ctrlUrl = "https://ingest.framedash.dev";
+	ctrlUrl.push_back('\0');
+	ctrlUrl += ".evil.example/v1/events";
+	EXPECT_TRUE(IsCrossOriginRedirect("https://ingest.framedash.dev/v1/events", ctrlUrl));
+}
+
+TEST(IsCrossOriginRedirect, MalformedPortEffectiveUrlFailsClosed)
+{
+	// A non-numeric port never appears in a legitimate landing URL; the origin
+	// differs from the configured ":443", so it fails closed (dropped) rather than
+	// being trusted. (Failing open is reserved for an undeterminable origin.)
+	EXPECT_TRUE(IsCrossOriginRedirect(
+		"https://ingest.framedash.dev/v1/events",
+		"https://ingest.framedash.dev:abc/v1/events"));
 }
