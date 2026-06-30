@@ -17,6 +17,7 @@
 #include "Async/Async.h"
 #include "Misc/EngineVersion.h"
 #include "HAL/PlatformTime.h"
+#include "HAL/PlatformMisc.h"
 #include "Misc/Char.h"
 #include "GameFramework/PlayerController.h"
 #include "Camera/PlayerCameraManager.h"
@@ -104,6 +105,56 @@ void UFramedashSubsystem::SetPlayerId(const FString& PlayerId)
 	SessionManager->SetPlayerId(PlayerId);
 }
 
+void UFramedashSubsystem::BeginAutomatedSession(const FString& BuildId, const FString& Branch, const FString& Commit, const FString& Scenario)
+{
+	if (!bInitialized)
+	{
+		UE_LOG(LogFramedash, Warning, TEXT("SDK not initialized. Call InitializeTelemetry() before BeginAutomatedSession()."));
+		return;
+	}
+	// No metadata at all (e.g. BeginAutomatedSessionFromEnvironment with the FRAMEDASH_*
+	// vars unset) is a true no-op: do not start an override or touch session attributes,
+	// so a later End cannot clear state this call never set.
+	if (BuildId.IsEmpty() && Branch.IsEmpty() && Commit.IsEmpty() && Scenario.IsEmpty())
+	{
+		return;
+	}
+	// Stamp events with the CI build_id in preference to CachedBuildId (see SessionBuildId
+	// and TrackWithData); CachedBuildId itself is never overwritten, so a re-init or a later
+	// config change can never strand a candidate id. Each Begin fully (re)defines the
+	// session: set the override (truncated to the ingest cap like the init path) when a
+	// build id is supplied, else clear it back to the CachedBuildId fallback -- the same
+	// replace-don't-merge semantics as the ci.* attributes below, so no stale build_id
+	// leaks from a prior session.
+	SessionBuildId = BuildId.IsEmpty() ? FString() : TruncateString(BuildId, FramedashConstants::MaxBuildIdLength);
+	// Replace any prior session attributes, value-clamped to the ingest cap here (once per
+	// session) so the per-event stamp in TrackWithData can copy them without re-truncating --
+	// this keeps the periodic perf_heartbeat off the per-attribute allocation path during a
+	// CI profiling session. The ci.* keys are fixed and well under the key cap, so only the
+	// values need clamping.
+	SessionAttributes.Reset();
+	if (!Branch.IsEmpty()) SessionAttributes.Add(TEXT("ci.branch"), TruncateString(Branch, FramedashConstants::MaxAttributeValueLength));
+	if (!Commit.IsEmpty()) SessionAttributes.Add(TEXT("ci.commit"), TruncateString(Commit, FramedashConstants::MaxAttributeValueLength));
+	if (!Scenario.IsEmpty()) SessionAttributes.Add(TEXT("ci.scenario"), TruncateString(Scenario, FramedashConstants::MaxAttributeValueLength));
+}
+
+void UFramedashSubsystem::BeginAutomatedSessionFromEnvironment()
+{
+	BeginAutomatedSession(
+		FPlatformMisc::GetEnvironmentVariable(TEXT("FRAMEDASH_BUILD_ID")),
+		FPlatformMisc::GetEnvironmentVariable(TEXT("FRAMEDASH_GIT_BRANCH")),
+		FPlatformMisc::GetEnvironmentVariable(TEXT("FRAMEDASH_GIT_COMMIT")),
+		FPlatformMisc::GetEnvironmentVariable(TEXT("FRAMEDASH_TEST_SCENARIO")));
+}
+
+void UFramedashSubsystem::EndAutomatedSession()
+{
+	SessionAttributes.Reset();
+	// Drop the automated-session build_id override so post-session events carry
+	// CachedBuildId again and are not grouped under the candidate build.
+	SessionBuildId.Empty();
+}
+
 void UFramedashSubsystem::InitializeInternal(const FString& ApiKey, const FString& EndpointUrl, const FString& BuildId, const FString& PlayerId, float SamplingRate)
 {
 	if (ApiKey.IsEmpty())
@@ -137,6 +188,11 @@ void UFramedashSubsystem::InitializeInternal(const FString& ApiKey, const FStrin
 	// flush for the new session. Because that stale callback is dropped, clearing
 	// the flag here cannot race a prior session's in-flight send.
 	bIsFlushing = false;
+	// A fresh session owns no automated-session build_id override or ci.* tags (a prior
+	// Begin without an End must not keep stamping events under the candidate build).
+	// SessionBuildId / SessionAttributes are only set via BeginAutomatedSession.
+	SessionBuildId.Empty();
+	SessionAttributes.Reset();
 
 	EventBuffer = MakePimpl<FFramedashEventBuffer>(FramedashConstants::EventBufferCapacity);
 	Transport = MakePimpl<FFramedashTransport>(CachedEndpointUrl, CachedApiKey);
@@ -327,23 +383,65 @@ void UFramedashSubsystem::TrackWithData(
 	Evt.GameThreadMs = Perf.GameThreadMs;
 	Evt.RenderThreadMs = Perf.RenderThreadMs;
 	Evt.Source = Source;
-	Evt.BuildId = CachedBuildId;
+	// Prefer the automated-session build_id (CI) when one is active; otherwise the
+	// configured CachedBuildId. The session value is never written over CachedBuildId, so a
+	// re-init or a later config change can never strand a candidate id.
+	Evt.BuildId = SessionBuildId.IsEmpty() ? CachedBuildId : SessionBuildId;
 	Evt.Platform = CachedPlatform;
 	Evt.EngineVersion = CachedEngineVersion;
 
-	// Copy attributes, enforcing the ingest caps client-side (count, key/value
-	// length). A single oversized map entry would make the consumer drop the
-	// whole flush. Empty keys are skipped (the server keys the map by name).
-	// Guard on the map's actual size, not a manual counter: two distinct long keys
-	// can truncate to the same key and collapse to one TMap entry, so a manual
-	// counter would stop short of MaxAttributePairs real entries.
-	for (const auto& Pair : Attributes)
+	// Stamp the automated-session CI metadata (set by BeginAutomatedSession, already
+	// value-clamped there). SessionAttributes is empty when no session is active.
+	if (Attributes.Num() == 0)
 	{
-		if (Evt.Attributes.Num() >= FramedashConstants::MaxAttributePairs) break;
-		if (Pair.Key.IsEmpty()) continue;
-		Evt.Attributes.Add(
-			TruncateString(Pair.Key, FramedashConstants::MaxAttributeKeyLength),
-			TruncateString(Pair.Value, FramedashConstants::MaxAttributeValueLength));
+		// Attribute-free event (e.g. the periodic perf_heartbeat / session_start): assign the
+		// precomputed, already-clamped session attributes in one copy -- no per-attribute
+		// TruncateString work. With no session active SessionAttributes is empty, so the
+		// steady-state heartbeat assignment allocates nothing and stays on the zero-allocation
+		// path (the hard rule). During an active CI session the heartbeat carries the ci.*
+		// tags, which is the rule's allowed "per-event when a Track() carries attributes"
+		// allocation: one small (<=3-entry) TMap copy taken AFTER the frame metrics are
+		// sampled, so it cannot perturb the values the heartbeat reports. The value-type,
+		// wire-critical FFramedashEvent cannot share a TMap reference the way the Unity/Godot
+		// List-based events do, so this single copy is the minimum cost of keeping the
+		// heartbeat tagged for cross-SDK parity.
+		Evt.Attributes = SessionAttributes;
+	}
+	else
+	{
+		// Merge path: session attributes FIRST so they are retained if the combined set hits
+		// the cap, then the per-event attributes -- a per-event key with the same name
+		// overrides the session value (see the per-event loop). Session values are pre-clamped;
+		// per-event keys/values are clamped here. A single oversized map entry would make the
+		// consumer drop the whole flush. Empty keys are skipped (the server keys the map by
+		// name). A key already present (a session attribute, or an earlier per-event key that
+		// truncated to the same value) is OVERRIDDEN regardless of the cap -- TMap::Add
+		// replaces without growing -- so the documented "per-event overrides session" contract
+		// holds even at the cap. Only a genuinely new key is subject to MaxAttributePairs.
+		// Guard on the map's actual size (not a manual counter): two distinct long keys can
+		// truncate to the same key and collapse to one entry, so a counter would stop short.
+		for (const auto& Pair : SessionAttributes)
+		{
+			if (Evt.Attributes.Num() >= FramedashConstants::MaxAttributePairs) break;
+			Evt.Attributes.Add(Pair.Key, Pair.Value);
+		}
+		for (const auto& Pair : Attributes)
+		{
+			if (Pair.Key.IsEmpty()) continue;
+			const FString Key = TruncateString(Pair.Key, FramedashConstants::MaxAttributeKeyLength);
+			// One hash lookup: an existing key (a session attribute, or an earlier per-event
+			// key that truncated to the same value) is OVERRIDDEN in place regardless of the
+			// cap, so the "per-event overrides session" contract holds even at the cap; only a
+			// genuinely new key is subject to MaxAttributePairs.
+			if (FString* ExistingValue = Evt.Attributes.Find(Key))
+			{
+				*ExistingValue = TruncateString(Pair.Value, FramedashConstants::MaxAttributeValueLength);
+			}
+			else if (Evt.Attributes.Num() < FramedashConstants::MaxAttributePairs)
+			{
+				Evt.Attributes.Add(Key, TruncateString(Pair.Value, FramedashConstants::MaxAttributeValueLength));
+			}
+		}
 	}
 
 	// Copy metrics, enforcing the ingest caps client-side (count, key length,

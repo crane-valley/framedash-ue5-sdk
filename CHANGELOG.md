@@ -6,6 +6,37 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-06-30
+
+### Added
+
+- Automated profiling sessions for CI: `BeginAutomatedSession(BuildId, Branch,
+  Commit, Scenario)` (and `BeginAutomatedSessionFromEnvironment()`, which reads the
+  `FRAMEDASH_BUILD_ID` / `FRAMEDASH_GIT_BRANCH` / `FRAMEDASH_GIT_COMMIT` /
+  `FRAMEDASH_TEST_SCENARIO` environment variables) tag every subsequent event with
+  CI metadata so build-over-build performance can be compared in the dashboard and
+  via `framedash perf-diff`. The build id is stamped as the first-class `build_id`;
+  branch, commit, and scenario ride in the existing attributes map as `ci.branch` /
+  `ci.commit` / `ci.scenario`, so nanopb is not regenerated. `EndAutomatedSession()`
+  stops the tagging. The session tags merge into every event -- including the
+  automatic `perf_heartbeat` that carries the performance metrics -- and a per-event
+  attribute with the same key overrides the session value. All three are
+  Blueprint-callable.
+- In-editor quickstart: activate a project from a Play-in-Editor session (no
+  packaged build, no real players) by sending one explicit map-qualified
+  `Track(EventName, MapId)`. A README "In-Editor Quickstart" section documents
+  the Blueprint flow, and a copyable C++ sample actor ships under
+  `Samples/InEditorQuickstart/` (staged into the redistributable but outside
+  `Source/`, so UBT never compiles it). The actor's configuration fields are
+  `WITH_EDITORONLY_DATA` and its activation logic is `WITH_EDITOR`, so both are
+  stripped from packaged builds while the inert `UCLASS` shell remains. The actor
+  validates the Map Id (always) and the Api Key (only when it must initialize)
+  before sending, so a misconfigured actor emits no telemetry and the "already
+  initialized" path works without re-entering a key; it forces a per-event
+  sampling override of 1.0 so a lowered global `SamplingRate` cannot drop the
+  activation ping. The README notes that the Blueprint path, unlike the C++ actor,
+  is not stripped from packaged builds.
+
 ## [0.1.1] - 2026-06-22
 
 ### Changed

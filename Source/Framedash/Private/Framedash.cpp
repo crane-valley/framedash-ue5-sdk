@@ -8,7 +8,7 @@ DEFINE_LOG_CATEGORY(LogFramedash);
 
 void FFramedashModule::StartupModule()
 {
-	UE_LOG(LogFramedash, Log, TEXT("Framedash SDK v0.1.1 module loaded"));
+	UE_LOG(LogFramedash, Log, TEXT("Framedash SDK v0.1.2 module loaded"));
 }
 
 void FFramedashModule::ShutdownModule()

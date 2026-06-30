@@ -55,6 +55,46 @@ public:
 	void SetPlayerId(const FString& PlayerId);
 
 	/**
+	 * Begin an automated profiling session: tag every subsequent event with CI metadata
+	 * so build-over-build performance can be compared in the dashboard and via
+	 * `framedash perf-diff`. BuildId is stamped as the first-class build_id field; Branch,
+	 * Commit and Scenario are attached as the ci.branch / ci.commit / ci.scenario
+	 * attributes. Each call fully (re)defines the session rather than patching it: an empty
+	 * BuildId clears any prior build_id override (events fall back to the configured
+	 * build_id) and an omitted Branch/Commit/Scenario is absent from the new tag set --
+	 * callers cannot incrementally update metadata across calls. With all arguments empty
+	 * this is a no-op. Call once after InitializeTelemetry(), before the profiling run.
+	 * No-op if the SDK is not initialized.
+	 */
+	UFUNCTION(BlueprintCallable, Category="Framedash")
+	void BeginAutomatedSession(
+		const FString& BuildId = TEXT(""),
+		const FString& Branch = TEXT(""),
+		const FString& Commit = TEXT(""),
+		const FString& Scenario = TEXT(""));
+
+	/**
+	 * Begin an automated profiling session from the standard Framedash CI environment
+	 * variables: FRAMEDASH_BUILD_ID, FRAMEDASH_GIT_BRANCH, FRAMEDASH_GIT_COMMIT,
+	 * FRAMEDASH_TEST_SCENARIO. The planned `framedash run-profile-test` runner will export
+	 * these before launching the game, so a CI integration needs only this one call. With
+	 * none of the variables set this is a no-op (no override is started). No-op if not
+	 * initialized.
+	 */
+	UFUNCTION(BlueprintCallable, Category="Framedash")
+	void BeginAutomatedSessionFromEnvironment();
+
+	/**
+	 * End the automated profiling session: clear the ci.* session attributes set by
+	 * BeginAutomatedSession AND drop the automated-session build_id override, so events
+	 * emitted afterward carry the configured build_id again and are no longer folded into
+	 * the candidate build's perf diff. Call Flush() first if you want the buffered tagged
+	 * events sent before the tags are cleared.
+	 */
+	UFUNCTION(BlueprintCallable, Category="Framedash")
+	void EndAutomatedSession();
+
+	/**
 	 * Track a custom telemetry event.
 	 * @param EventName  Name of the event (e.g. "player_death", "zone_enter").
 	 * @param MapId      Optional map identifier for spatial context.
@@ -149,6 +189,21 @@ private:
 	FString CachedBuildId;
 	FString CachedPlatform;
 	FString CachedEngineVersion;
+
+	// Session-level attributes set by BeginAutomatedSession (CI metadata:
+	// ci.branch / ci.commit / ci.scenario). Empty when no automated session is
+	// active. Stamped onto every event in TrackWithData (before the per-event
+	// attributes, which override on a key collision) so CI-tagged performance data
+	// is queryable per build/branch/scenario. Game-thread only (set from the public
+	// API, read in TrackWithData), like the other cached config above.
+	TMap<FString, FString> SessionAttributes;
+
+	// Automated-session (CI) build_id override set by BeginAutomatedSession. Events are
+	// stamped with it in preference to CachedBuildId so the candidate build_id never has
+	// to be written over CachedBuildId (which a re-init or a later config change would
+	// otherwise strand). Empty = no session override, fall back to CachedBuildId.
+	// EndAutomatedSession / re-init clear it. compareBuildPerformance groups by build_id.
+	FString SessionBuildId;
 
 	float TimeSinceLastFlush = 0.0f;
 	float TimeSinceLastHeartbeat = 0.0f;

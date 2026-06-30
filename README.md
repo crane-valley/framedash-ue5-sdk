@@ -193,6 +193,86 @@ if (auto* Framedash = GetGameInstance()->GetSubsystem<UFramedashSubsystem>())
 
 `SetEventSamplingRate` and `RemoveEventSamplingRate` are also Blueprint-callable.
 
+### 6. Automated profiling sessions (CI)
+
+For build-over-build performance gating, tag a run's events with build metadata
+so the dashboard and `framedash perf-diff` can compare one build against another.
+Call this once after `InitializeTelemetry()` in your automated-test / profiling
+entry point:
+
+```cpp
+if (auto* Framedash = GetGameInstance()->GetSubsystem<UFramedashSubsystem>())
+{
+    Framedash->BeginAutomatedSession(
+        CommitSha,             // -> stamped as the first-class build_id field
+        TEXT("main"),          // -> ci.branch attribute
+        CommitSha,             // -> ci.commit attribute
+        TEXT("boot_to_menu")); // -> ci.scenario attribute
+
+    // ... run the scenario; gameplay + perf_heartbeat events are now tagged ...
+
+    Framedash->Flush();
+    Framedash->EndAutomatedSession();
+}
+```
+
+`Branch`, `Commit`, and `Scenario` ride in the existing event `attributes` map
+(`ci.*`), so nanopb is not regenerated; the tags apply to every event, including
+the automatic `perf_heartbeat` that carries the frame-time / memory / GPU metrics.
+A per-event attribute with the same key overrides the session value.
+
+If your CI harness exports the standard Framedash variables (`FRAMEDASH_BUILD_ID`,
+`FRAMEDASH_GIT_BRANCH`, `FRAMEDASH_GIT_COMMIT`, `FRAMEDASH_TEST_SCENARIO`) -- the
+planned `framedash run-profile-test` runner will export these for you -- call the
+no-argument `BeginAutomatedSessionFromEnvironment()` instead. All three functions
+are Blueprint-callable. Then gate the build in CI with
+`framedash perf-diff --baseline <old_build_id> --candidate <new_build_id> --fail-on-regression`.
+
+Two things to know when wiring this into a real pipeline:
+
+- `build_id` is the dimension `perf-diff` compares. It groups and compares by
+  `build_id` (optionally narrowed by map/platform), not by `ci.scenario`, so two
+  scenarios under one `build_id` fold into a single aggregate. To compare
+  scenarios independently, give each its own `build_id` (for example
+  `<commit>-<scenario>`) and treat `ci.scenario` as a queryable label rather than
+  a `perf-diff` split key.
+- The `ci.*` tags live in the event `attributes` map, which COPPA-redacted
+  projects strip on ingest -- under COPPA only `build_id` survives. If you run
+  automated profiling on a COPPA project, make `build_id` carry everything the
+  comparison must distinguish.
+
+## In-Editor Quickstart
+
+Want to see a point on a real heatmap before wiring telemetry into your game?
+**Activate your project from a Play-in-Editor (PIE) session** -- no packaged build
+and no real players. Your project activates on its first real, map-qualified
+spatial event; the automatic perf heartbeat sends an empty `map_id` and does
+**not** count, so the quickstart sends one explicit `Track(EventName, MapId)` with
+a non-empty, registered `map_id`.
+
+1. **Register a map** in the dashboard (**Maps > Generate demo** or upload one) and
+   copy a `map_id` -- the heatmap 404s on an unknown map.
+2. **Get an Ingest key** (`events:write` scope; API keys > new key, **Ingest**
+   preset).
+3. From any actor's (or the Level Blueprint's) **Event BeginPlay**: **Get Framedash
+   Subsystem** -> if **not** **Is Initialized**, **Initialize Telemetry** (`Api Key`)
+   -> **Set Event Sampling Rate** (`quickstart_ping`, `1.0`) so a lowered global
+   `SamplingRate` cannot drop the ping -> **Track** (`Event Name` = `quickstart_ping`,
+   `Map Id` = your map, `Position` = a vector inside the map; the demo maps contain
+   the origin) -> **Flush**.
+4. Press **Play** (PIE). Open that map's heatmap -- your point appears in seconds.
+
+> Blueprint logic is **not** stripped from packaged builds, so keep this in a
+> throwaway test level (or remove it after activating) -- otherwise a forgotten
+> `BeginPlay` graph would send `quickstart_ping` from real players in a shipped
+> build.
+
+The same flow as a copyable C++ actor (with **editor-only gating** -- guaranteed
+inert in packaged builds -- plus field validation and the sampling override) ships
+under [`Samples/InEditorQuickstart/`](Samples/InEditorQuickstart/README.md). These
+are **real** events (not the dashboard "Generate demo" synthetic data), so they
+count toward activation.
+
 ## Local Development
 
 Step-by-step guide for testing the UE5 SDK against a local Framedash backend.
