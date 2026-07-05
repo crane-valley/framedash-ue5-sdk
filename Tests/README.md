@@ -16,6 +16,14 @@ so retry/flush logic can be regressed without spinning up the engine.
 - `FramedashFlushPolicy` -- batch-size, payload-size, and interval triggers.
 - `FramedashUuid` -- RFC 9562 UUIDv7 bit layout (`PackUuidV7`) and the
   Xoshiro256++ PRNG used to source rand_a / rand_b at session start.
+- `FramedashAddressPlanner` -- prefer-IPv4-with-IPv6-fallback endpoint
+  qualification, IPv4-first attempt ordering, family toggle, and the
+  Host-header / request-target / port extraction the direct-socket fallback
+  feeds into the raw request head.
+- `FramedashRawHttp` -- raw HTTP/1.1 request-head builder, header/target
+  sanitization (request-smuggling hygiene), and incremental status-line
+  parsing. (The socket/TLS glue itself, `FramedashDirectSocketSender`, is
+  UE-coupled and engine-only -- not host-testable by design.)
 
 ## Requirements
 

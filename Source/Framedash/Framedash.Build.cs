@@ -49,6 +49,31 @@ public class Framedash : ModuleRules
 			"RHI",
 		});
 
+		// Direct-socket TLS fallback for the prefer-IPv4-with-IPv6-fallback
+		// ingest connect (FramedashDirectSocketSender). Compiled only where
+		// the engine SSL module actually provides OpenSSL -- the platform
+		// predicate mirrors SSL.Build.cs's own WITH_SSL gate -- so platforms
+		// without it keep the existing IHttpRequest-only transport untouched.
+		bool bSupportsDirectSocketTls =
+			Target.Platform == UnrealTargetPlatform.Win64 ||
+			Target.Platform == UnrealTargetPlatform.Mac ||
+			Target.Platform == UnrealTargetPlatform.IOS ||
+			Target.Platform == UnrealTargetPlatform.Android ||
+			Target.IsInPlatformGroup(UnrealPlatformGroup.Unix);
+		if (bSupportsDirectSocketTls)
+		{
+			PrivateDependencyModuleNames.AddRange(new string[] {
+				"SSL",
+				"Sockets",
+			});
+			AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL");
+			PrivateDefinitions.Add("FRAMEDASH_WITH_DIRECT_SOCKET_TLS=1");
+		}
+		else
+		{
+			PrivateDefinitions.Add("FRAMEDASH_WITH_DIRECT_SOCKET_TLS=0");
+		}
+
 		// nanopb C files need special handling
 		PublicDefinitions.Add("PB_FIELD_32BIT=1");
 	}

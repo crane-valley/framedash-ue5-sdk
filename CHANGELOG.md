@@ -6,6 +6,30 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-07-05
+
+### Added
+
+- Prefer-IPv4-with-IPv6-fallback ingest connect via a direct-socket TLS
+  fallback (parity with the Unity SDK fix). On a transport-level failure
+  (status 0) of the primary `IHttpRequest` attempt -- which cannot pin an
+  address family (engine libcurl, no portable `CURLOPT_IPRESOLVE`) -- the
+  transport resolves the endpoint to concrete IPv4/IPv6 addresses on a
+  background thread and retries within the same attempt over an `FSocket`
+  connected to the resolved IPv4 literal (IPv6 fallback; the family toggles
+  only on repeated transport-level failure), with TLS via the engine SSL
+  module's OpenSSL: full standard chain/expiry/hostname validation against
+  the original FQDN (`SSL_VERIFY_PEER` + `SSL_set1_host` + SNI, TLS 1.2
+  floor, engine trust roots) and `Host: <fqdn>` so Cloudflare routing is
+  unchanged. Broken-IPv6 hosts (blackholed AAAA route) now deliver in-flush
+  over IPv4 instead of parking every batch in the offline queue until the
+  persisted cap. Retry accounting: `MaxRetries` bounds primary attempts;
+  each transport-level primary failure may add one fallback POST (worst case
+  2x POSTs and ~20s wall per attempt on total blackout). Endpoints whose
+  ingest domain has pinned public keys, loopback/IP-literal/non-HTTPS
+  endpoints, and platforms without the engine SSL module keep the previous
+  `IHttpRequest`-only behavior unchanged.
+
 ## [0.1.4] - 2026-07-05
 
 ### Changed

@@ -22,6 +22,16 @@
 #include "Tasks/Task.h"
 #endif
 
+#if FRAMEDASH_WITH_DIRECT_SOCKET_TLS
+#include "FramedashAddressPlanner.h"
+#include "FramedashDirectSocketSender.h"
+#include "FramedashRawHttp.h"
+#include "Interfaces/ISslCertificateManager.h"
+#include "Interfaces/ISslManager.h"
+#include "Modules/ModuleManager.h"
+#include "SslModule.h"
+#endif
+
 #include <limits>
 
 namespace
@@ -149,6 +159,19 @@ FFramedashTransport::FFramedashTransport(const FString& InEndpointUrl, const FSt
 			TEXT("EndpointUrl is \"%s\" -- this looks truncated by UE .ini parsing (the value was cut at \"//\"). Quote the value in Config/DefaultGame.ini (EndpointUrl=\"https://...\") or remove the line to use the built-in default."),
 			*EndpointUrl);
 	}
+
+#if FRAMEDASH_WITH_DIRECT_SOCKET_TLS
+	// Prefer-IPv4-with-IPv6-fallback eligibility is structural (remote HTTPS
+	// hostname) and EndpointUrl is immutable, so decide once here. The plan
+	// cache is shared with background fallback tasks (TSharedPtr) so a task
+	// finishing after transport destruction still has valid storage.
+	bFallbackEligible = bEndpointSecure &&
+		Framedash::ShouldForceAddressFamily(ToUtf8String(EndpointUrl));
+	if (bFallbackEligible)
+	{
+		PlanCache = MakeShared<FFramedashPlanCache, ESPMode::ThreadSafe>();
+	}
+#endif
 }
 
 FFramedashTransport::~FFramedashTransport()
@@ -331,7 +354,7 @@ void FFramedashTransport::SendBatch(
 		AsyncTask(ENamedThreads::GameThread, [this, AliveFlagCopy, Payload, OriginalEvents, bIsCompressed, OnTransientFailure, OnClosed]()
 		{
 			if (!AliveFlagCopy->load(std::memory_order_acquire)) return;
-			SendHttpRequest(Payload, OriginalEvents, 0, bIsCompressed, OnTransientFailure, OnClosed);
+			SendHttpRequest(Payload, OriginalEvents, /*RetryCount*/ 0, /*FamilyIndex*/ 0, bIsCompressed, OnTransientFailure, OnClosed);
 		});
 	};
 
@@ -400,6 +423,7 @@ void FFramedashTransport::SendHttpRequest(
 	TSharedRef<TArray<uint8>, ESPMode::ThreadSafe> Payload,
 	TSharedRef<TArray<FFramedashEvent>, ESPMode::ThreadSafe> Events,
 	int32 RetryCount,
+	int32 FamilyIndex,
 	bool bIsCompressed,
 	FFramedashBatchFailureHandler OnTransientFailure,
 	FFramedashBatchClosedHandler OnClosed)
@@ -434,7 +458,7 @@ void FFramedashTransport::SendHttpRequest(
 	TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> AliveFlagCopy = AliveFlag;
 
 	Request->OnProcessRequestComplete().BindLambda(
-		[this, AliveFlagCopy, Payload, Events, RetryCount, bIsCompressed, OnTransientFailure, OnClosed]
+		[this, AliveFlagCopy, Payload, Events, RetryCount, FamilyIndex, bIsCompressed, OnTransientFailure, OnClosed]
 		(FHttpRequestPtr Req, FHttpResponsePtr Resp, bool bSuccess)
 	{
 		if (!AliveFlagCopy->load(std::memory_order_acquire))
@@ -482,111 +506,320 @@ void FFramedashTransport::SendHttpRequest(
 		}
 #endif
 
-		// Reuse the engine-independent retry policy while preserving the
-		// original events for offline persistence and reactive 413 splitting.
-		const Framedash::FRetryPolicy Policy(FramedashConstants::MaxRetries);
-		const Framedash::ERetryAction Action = Policy.Classify(StatusCode, RetryCount, Events->Num());
-		const int32 MaxRetries = Policy.GetMaxRetries();
-
-		switch (Action)
-		{
-		case Framedash::ERetryAction::Success:
+#if FRAMEDASH_WITH_DIRECT_SOCKET_TLS
+		// Prefer-IPv4-with-IPv6-fallback (parity with Unity #1218 / Godot
+		// #1216): a transport-level failure (status 0: DNS/connect/TLS/
+		// timeout/reset) on the primary IHttpRequest attempt triggers ONE
+		// direct-socket TLS retry pinned to a resolved IP literal (IPv4
+		// first) within the SAME attempt, so a broken-IPv6 host (blackholed
+		// AAAA route) delivers in-flush instead of relying on the offline
+		// queue and the next run. The healthy path stays IHttpRequest; only
+		// the failure path pays for the fallback. IHttpRequest itself cannot
+		// pin an address family (engine libcurl, no portable
+		// CURLOPT_IPRESOLVE), hence the raw FSocket + engine-OpenSSL path.
+		//
+		// ATTEMPT-ACCOUNTING CONTRACT (same as Unity #1218): MaxRetries
+		// bounds PRIMARY IHttpRequest attempts, and each transport-level
+		// primary failure may add ONE fallback POST within the same attempt.
+		// Worst case (total blackout, both paths timing out every attempt)
+		// is 2 x MaxRetries POSTs and roughly 2 x HttpTimeoutSeconds (~20s)
+		// wall time per attempt, in exchange for in-flush delivery whenever
+		// either path works.
+		if (StatusCode == 0 && bFallbackEligible && EnsureSslReady())
 		{
 #if UE_BUILD_DEBUG || UE_BUILD_DEVELOPMENT
-			UE_LOG(LogFramedash, Log, TEXT("Batch sent successfully (HTTP %d)."), StatusCode);
-#else
-			UE_LOG(LogFramedash, Verbose, TEXT("Batch sent successfully (HTTP %d)."), StatusCode);
+			UE_LOG(LogFramedash, Log, TEXT("Transport-level failure on primary connect; engaging direct-socket IPv4/IPv6 fallback (attempt %d)."), RetryCount + 1);
 #endif
-			if (OnClosed)
-			{
-				OnClosed(Events->Num());
-			}
+			StartDirectSocketFallback(Payload, Events, RetryCount, FamilyIndex, bIsCompressed, OnTransientFailure, OnClosed);
 			return;
 		}
-		case Framedash::ERetryAction::Retry:
-		{
-			const float Delay = Policy.GetRetryDelaySeconds(RetryCount);
-			if (StatusCode == 0)
-			{
-				UE_LOG(LogFramedash, Warning, TEXT("HTTP request failed (no response). Retrying in %.0fs (attempt %d/%d)..."),
-					Delay, RetryCount + 1, MaxRetries);
-			}
-			else
-			{
-#if UE_BUILD_DEBUG || UE_BUILD_DEVELOPMENT
-				UE_LOG(LogFramedash, Warning, TEXT("HTTP %d response: %s"),
-					StatusCode, *Resp->GetContentAsString().Left(500));
 #endif
-				UE_LOG(LogFramedash, Warning, TEXT("HTTP %d. Retrying in %.0fs (attempt %d/%d)..."),
-					StatusCode, Delay, RetryCount + 1, MaxRetries);
-			}
 
-			FTSTicker::GetCoreTicker().AddTicker(
-				FTickerDelegate::CreateLambda([this, AliveFlagCopy, Payload, Events, RetryCount, bIsCompressed, OnTransientFailure, OnClosed](float) -> bool
-				{
-					if (!AliveFlagCopy->load(std::memory_order_acquire)) return false;
-					SendHttpRequest(Payload, Events, RetryCount + 1, bIsCompressed, OnTransientFailure, OnClosed);
-					return false; // One-shot
-				}),
-				Delay
-			);
-			return;
-		}
-		case Framedash::ERetryAction::SplitBatch:
-		{
-			// Materialize the TSharedRef<TArray> into a local TArray so the
-			// helper signature (takes TArray by value) can move from it. The
-			// handlers are const captures of this non-mutable completion lambda,
-			// so they must be copied (MoveTemp on a const object fails to compile).
-			TArray<FFramedashEvent> LocalEvents(MoveTemp(*Events));
-			UE_LOG(LogFramedash, Log, TEXT("HTTP 413. Splitting %d events."), LocalEvents.Num());
-			SplitBatchAndResend(MoveTemp(LocalEvents), OnTransientFailure, OnClosed);
-			return;
-		}
-		case Framedash::ERetryAction::Fail:
-		default:
-		{
-			if (StatusCode == 0 || StatusCode == 429 || StatusCode >= 500)
-			{
-				if (StatusCode == 0)
-				{
-					UE_LOG(LogFramedash, Error, TEXT("Network error - max retries reached. Persisting %d event(s) for retry."), Events->Num());
-				}
-				else
-				{
-					UE_LOG(LogFramedash, Error, TEXT("Max retries reached. Persisting %d event(s) for retry (HTTP %d)."),
-						Events->Num(), StatusCode);
-				}
-				if (OnTransientFailure)
-				{
-					OnTransientFailure(TArray<FFramedashEvent>(*Events), 0);
-				}
-				if (OnClosed)
-				{
-					OnClosed(0);
-				}
-				return;
-			}
-			else if (StatusCode == 413)
-			{
-				UE_LOG(LogFramedash, Error, TEXT("HTTP 413 - single event cannot be split, event dropped."));
-			}
-			else
-			{
-				UE_LOG(LogFramedash, Error, TEXT("HTTP %d - events dropped. Response: %s"),
-					StatusCode, bHasResponse ? *Resp->GetContentAsString().Left(200) : TEXT(""));
-			}
-			if (OnClosed)
-			{
-				OnClosed(Events->Num());
-			}
-			return;
-		}
-		}
+		// Body excerpt for the warning/error logs only (the success path
+		// never logs the body); extracted here while the response is in
+		// scope so HandleResponseOutcome never needs the response object.
+		const FString ResponseSnippet = (bHasResponse && StatusCode >= 300)
+			? Resp->GetContentAsString().Left(500)
+			: FString();
+
+		HandleResponseOutcome(StatusCode, ResponseSnippet, bHasResponse,
+			Payload, Events, RetryCount, FamilyIndex, bIsCompressed,
+			OnTransientFailure, OnClosed);
 	});
 
 	Request->ProcessRequest();
 }
+
+// Shared classification tail for the primary IHttpRequest path and the
+// direct-socket fallback path (which supplies bHasResponse = false and an
+// empty snippet -- it only parses the status line). Game thread only.
+void FFramedashTransport::HandleResponseOutcome(
+	int32 StatusCode,
+	const FString& ResponseSnippet,
+	bool bHasResponse,
+	TSharedRef<TArray<uint8>, ESPMode::ThreadSafe> Payload,
+	TSharedRef<TArray<FFramedashEvent>, ESPMode::ThreadSafe> Events,
+	int32 RetryCount,
+	int32 FamilyIndex,
+	bool bIsCompressed,
+	FFramedashBatchFailureHandler OnTransientFailure,
+	FFramedashBatchClosedHandler OnClosed)
+{
+	TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> AliveFlagCopy = AliveFlag;
+
+	// Reuse the engine-independent retry policy while preserving the
+	// original events for offline persistence and reactive 413 splitting.
+	const Framedash::FRetryPolicy Policy(FramedashConstants::MaxRetries);
+	const Framedash::ERetryAction Action = Policy.Classify(StatusCode, RetryCount, Events->Num());
+	const int32 MaxRetries = Policy.GetMaxRetries();
+
+	switch (Action)
+	{
+	case Framedash::ERetryAction::Success:
+	{
+#if UE_BUILD_DEBUG || UE_BUILD_DEVELOPMENT
+		UE_LOG(LogFramedash, Log, TEXT("Batch sent successfully (HTTP %d)."), StatusCode);
+#else
+		UE_LOG(LogFramedash, Verbose, TEXT("Batch sent successfully (HTTP %d)."), StatusCode);
+#endif
+		if (OnClosed)
+		{
+			OnClosed(Events->Num());
+		}
+		return;
+	}
+	case Framedash::ERetryAction::Retry:
+	{
+		const float Delay = Policy.GetRetryDelaySeconds(RetryCount);
+		if (StatusCode == 0)
+		{
+			UE_LOG(LogFramedash, Warning, TEXT("HTTP request failed (no response). Retrying in %.0fs (attempt %d/%d)..."),
+				Delay, RetryCount + 1, MaxRetries);
+		}
+		else
+		{
+#if UE_BUILD_DEBUG || UE_BUILD_DEVELOPMENT
+			if (bHasResponse)
+			{
+				UE_LOG(LogFramedash, Warning, TEXT("HTTP %d response: %s"),
+					StatusCode, *ResponseSnippet);
+			}
+#endif
+			UE_LOG(LogFramedash, Warning, TEXT("HTTP %d. Retrying in %.0fs (attempt %d/%d)..."),
+				StatusCode, Delay, RetryCount + 1, MaxRetries);
+		}
+
+		FTSTicker::GetCoreTicker().AddTicker(
+			FTickerDelegate::CreateLambda([this, AliveFlagCopy, Payload, Events, RetryCount, FamilyIndex, bIsCompressed, OnTransientFailure, OnClosed](float) -> bool
+			{
+				if (!AliveFlagCopy->load(std::memory_order_acquire)) return false;
+				SendHttpRequest(Payload, Events, RetryCount + 1, FamilyIndex, bIsCompressed, OnTransientFailure, OnClosed);
+				return false; // One-shot
+			}),
+			Delay
+		);
+		return;
+	}
+	case Framedash::ERetryAction::SplitBatch:
+	{
+		// Materialize the TSharedRef<TArray> into a local TArray so the
+		// helper signature (takes TArray by value) can move from it. The
+		// handlers arrive by value here, but keep the copy semantics (the
+		// same handlers may still be shared with a sibling half).
+		TArray<FFramedashEvent> LocalEvents(MoveTemp(*Events));
+		UE_LOG(LogFramedash, Log, TEXT("HTTP 413. Splitting %d events."), LocalEvents.Num());
+		SplitBatchAndResend(MoveTemp(LocalEvents), OnTransientFailure, OnClosed);
+		return;
+	}
+	case Framedash::ERetryAction::Fail:
+	default:
+	{
+		if (StatusCode == 0 || StatusCode == 429 || StatusCode >= 500)
+		{
+			if (StatusCode == 0)
+			{
+				UE_LOG(LogFramedash, Error, TEXT("Network error - max retries reached. Persisting %d event(s) for retry."), Events->Num());
+			}
+			else
+			{
+				UE_LOG(LogFramedash, Error, TEXT("Max retries reached. Persisting %d event(s) for retry (HTTP %d)."),
+					Events->Num(), StatusCode);
+			}
+			if (OnTransientFailure)
+			{
+				OnTransientFailure(TArray<FFramedashEvent>(*Events), 0);
+			}
+			if (OnClosed)
+			{
+				OnClosed(0);
+			}
+			return;
+		}
+		else if (StatusCode == 413)
+		{
+			UE_LOG(LogFramedash, Error, TEXT("HTTP 413 - single event cannot be split, event dropped."));
+		}
+		else
+		{
+			// The direct-socket fallback only parses the status line (all
+			// the classification needs), so it has no body text to show.
+			UE_LOG(LogFramedash, Error, TEXT("HTTP %d - events dropped. Response: %s"),
+				StatusCode, bHasResponse ? *ResponseSnippet.Left(200) : TEXT("(direct-socket fallback; no response body captured)"));
+		}
+		if (OnClosed)
+		{
+			OnClosed(Events->Num());
+		}
+		return;
+	}
+	}
+}
+
+#if FRAMEDASH_WITH_DIRECT_SOCKET_TLS
+
+// -- Direct-socket IPv4/IPv6 fallback ---------------------------------------
+
+bool FFramedashTransport::EnsureSslReady()
+{
+	if (bSslInitAttempted)
+	{
+		return bSslReady;
+	}
+	bSslInitAttempted = true;
+
+	// Module loading must happen on the game thread (all completion
+	// delegates run there). LoadModulePtr instead of LoadModuleChecked:
+	// a missing module disables the fallback, never asserts (fail-safe SDK).
+	FSslModule* SslModule = FModuleManager::LoadModulePtr<FSslModule>("SSL");
+	if (SslModule == nullptr)
+	{
+		UE_LOG(LogFramedash, Log, TEXT("SSL module unavailable; direct-socket IPv4/IPv6 fallback disabled (IHttpRequest path unchanged)."));
+		return false;
+	}
+
+	// Refcounted engine-global init (a no-op outside monolithic builds,
+	// where OpenSSL 1.1+ self-initializes). The matching ShutdownSsl is
+	// deliberately never called -- see the SslManager member doc.
+	SslModule->GetSslManager().InitializeSsl();
+
+	ISslCertificateManager& CertManagerRef = SslModule->GetCertificateManager();
+	if (!CertManagerRef.HasCertificatesAvailable())
+	{
+		// No trust roots means the fallback could not validate the peer.
+		// Fail closed: keep the engine HTTP path only.
+		UE_LOG(LogFramedash, Log, TEXT("No SSL trust roots available; direct-socket IPv4/IPv6 fallback disabled."));
+		return false;
+	}
+
+	// If the game pinned public keys for the ingest domain, the engine HTTP
+	// stack enforces them via the certificate manager. The direct-socket
+	// path performs standard chain + hostname validation but does NOT
+	// implement pinning -- so rather than silently weakening a configured
+	// pin, disable the fallback for pinned domains entirely.
+	const std::string HostUtf8 = Framedash::ExtractUrlHost(ToUtf8String(EndpointUrl));
+	const FString Host(UTF8_TO_TCHAR(HostUtf8.c_str()));
+	if (CertManagerRef.HasPinnedPublicKeys() && CertManagerRef.IsDomainPinned(Host))
+	{
+		UE_LOG(LogFramedash, Log, TEXT("Endpoint domain has pinned public keys; direct-socket IPv4/IPv6 fallback disabled (pinning is not bypassed)."));
+		return false;
+	}
+
+	CertificateManager = &SslModule->GetCertificateManager();
+	bSslReady = true;
+	return true;
+}
+
+void FFramedashTransport::StartDirectSocketFallback(
+	TSharedRef<TArray<uint8>, ESPMode::ThreadSafe> Payload,
+	TSharedRef<TArray<FFramedashEvent>, ESPMode::ThreadSafe> Events,
+	int32 RetryCount,
+	int32 FamilyIndex,
+	bool bIsCompressed,
+	FFramedashBatchFailureHandler OnTransientFailure,
+	FFramedashBatchClosedHandler OnClosed)
+{
+	// Everything the background task needs is COPIED here: the task must
+	// never dereference `this` off the game thread (the transport may be
+	// destroyed while it runs; only the game-thread continuation below may
+	// touch `this`, after re-checking AliveFlag -- destruction also happens
+	// on the game thread, so the check-then-use there cannot interleave).
+	TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> AliveFlagCopy = AliveFlag;
+	TSharedRef<FFramedashPlanCache, ESPMode::ThreadSafe> Cache = PlanCache.ToSharedRef();
+	ISslCertificateManager* Manager = CertificateManager; // module-owned, outlives the transport
+	const FString Endpoint = EndpointUrl;
+	const std::string ApiKeyUtf8 = ToUtf8String(ApiKey);
+	const std::string SdkVersionUtf8 =
+		ToUtf8String(FString::Printf(TEXT("%s/%s"), FRAMEDASH_SDK_NAME, FRAMEDASH_SDK_VERSION));
+
+	auto TaskBody = [this, AliveFlagCopy, Cache, Manager, Endpoint, ApiKeyUtf8, SdkVersionUtf8,
+		Payload, Events, RetryCount, FamilyIndex, bIsCompressed, OnTransientFailure, OnClosed]() mutable
+	{
+		int32 FallbackStatus = 0;
+		int32 NextIndex = FamilyIndex;
+
+		// Resolve (cached after the first success) and POST over a socket
+		// pinned to the selected family's IP literal. AcquirePlan returns
+		// null when the fallback must not engage (resolution failure or a
+		// resolve already in flight); the attempt then classifies as the
+		// original transport-level failure (status 0).
+		TSharedPtr<const Framedash::FAddressPlan, ESPMode::ThreadSafe> Plan =
+			FramedashDirectSocket::AcquirePlan(Endpoint, Cache);
+		if (!Plan.IsValid() || Plan->IsPassthrough())
+		{
+#if UE_BUILD_DEBUG || UE_BUILD_DEVELOPMENT
+			UE_LOG(LogFramedash, Log, TEXT("Direct-socket fallback skipped: no delivery plan (DNS resolution pending/failed or passthrough endpoint)."));
+#else
+			UE_LOG(LogFramedash, Verbose, TEXT("Direct-socket fallback skipped: no delivery plan (DNS resolution pending/failed or passthrough endpoint)."));
+#endif
+		}
+		if (Plan.IsValid() && !Plan->IsPassthrough())
+		{
+			const int32 AttemptCount = static_cast<int32>(Plan->Attempts.size());
+			// Normalize the inherited index against the (fixed) plan size.
+			const int32 Index = (FamilyIndex >= 0 && FamilyIndex < AttemptCount) ? FamilyIndex : 0;
+			const std::string Head = Framedash::BuildPostHead(
+				Plan->RequestTarget, Plan->HostHeader, ApiKeyUtf8, SdkVersionUtf8,
+				static_cast<long long>(Payload->Num()), bIsCompressed);
+			FallbackStatus = FramedashDirectSocket::PostBlocking(
+				*Plan, Index, Head, *Payload,
+				FramedashConstants::HttpTimeoutSeconds, *Manager);
+
+			// The fallback itself failed at the transport level: TOGGLE to
+			// the other family for the next attempt (IPv4 <-> IPv6,
+			// wrapping), so an IPv6-only network delivers over IPv6 AND a
+			// broken-IPv6 network returns to the working IPv4 after a
+			// transient glitch instead of wedging on the IPv6 blackhole. A
+			// real HTTP status keeps the same family.
+			NextIndex = (FallbackStatus == 0)
+				? Framedash::NextFamilyIndex(Index, AttemptCount)
+				: Index;
+		}
+
+		AsyncTask(ENamedThreads::GameThread,
+			[this, AliveFlagCopy, Payload, Events, RetryCount, NextIndex, bIsCompressed,
+			OnTransientFailure, OnClosed, FallbackStatus]()
+		{
+			if (!AliveFlagCopy->load(std::memory_order_acquire))
+			{
+				UE_LOG(LogFramedash, Warning, TEXT("Transport destroyed - dropping direct-socket fallback result."));
+				return;
+			}
+			HandleResponseOutcome(FallbackStatus, FString(), /*bHasResponse*/ false,
+				Payload, Events, RetryCount, NextIndex, bIsCompressed,
+				OnTransientFailure, OnClosed);
+		});
+	};
+
+	// Same background-execution infrastructure as the serialize path.
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
+	UE::Tasks::Launch(TEXT("Framedash::DirectSocketFallback"), MoveTemp(TaskBody),
+		UE::Tasks::ETaskPriority::BackgroundNormal);
+#else
+	Async(EAsyncExecution::ThreadPool, MoveTemp(TaskBody));
+#endif
+}
+
+#endif // FRAMEDASH_WITH_DIRECT_SOCKET_TLS
 
 // -- Security validation --------------------------------------------------
 
