@@ -136,6 +136,19 @@ FFramedashTransport::FFramedashTransport(const FString& InEndpointUrl, const FSt
 	// construction (no setters), so SendBatch reads the cached bool rather than
 	// re-parsing/re-allocating on every flush.
 	bEndpointSecure = ValidateEndpointSecurity();
+
+	// Targeted hint for a common Config/DefaultGame.ini misconfiguration. An
+	// unquoted URL value (e.g. EndpointUrl=https://ingest.framedash.dev/v1/events)
+	// can be truncated to a bare scheme ("https:" / "http:") when read from the
+	// .ini, because the value loses everything from "//" onward. The bare scheme
+	// fails the HTTPS check and every batch is then silently dropped, which is
+	// easy to mistake for a network or endpoint outage. Surface the actual fix.
+	if (!bEndpointSecure && (EndpointUrl == TEXT("https:") || EndpointUrl == TEXT("http:")))
+	{
+		UE_LOG(LogFramedash, Error,
+			TEXT("EndpointUrl is \"%s\" -- this looks truncated by UE .ini parsing (the value was cut at \"//\"). Quote the value in Config/DefaultGame.ini (EndpointUrl=\"https://...\") or remove the line to use the built-in default."),
+			*EndpointUrl);
+	}
 }
 
 FFramedashTransport::~FFramedashTransport()

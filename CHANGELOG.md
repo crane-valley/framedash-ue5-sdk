@@ -6,6 +6,24 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-05
+
+### Fixed
+
+- Setup docs no longer silently drop all telemetry. An unquoted `EndpointUrl` in
+  `Config/DefaultGame.ini` is truncated at `//` when UE reads the `.ini` (the
+  value collapses to a bare `http:` / `https:`), which fails the endpoint check
+  and drops every batch. The README now quotes the value (UE strips the quotes
+  on read) and recommends omitting the line to use the compiled default; the SDK
+  logs a targeted hint when it detects a truncated `http:` / `https:` endpoint.
+- The redistributable release zip is no longer pinned to a single engine build.
+  `RunUAT BuildPlugin` stamped the packaged descriptor with an `EngineVersion`
+  equal to the build engine, which raised a blocking "designed for build X" modal
+  on other 5.x versions and broke headless/CI starts; the packaging script now
+  strips it so the plugin stays unpinned (UE 5.3+ floor unchanged).
+- `DocsURL` now points at the live guide (`/en/sdk/unreal/`) instead of the
+  dead `/en/sdk/ue5` URL.
+
 ## [0.1.2] - 2026-06-30
 
 ### Added

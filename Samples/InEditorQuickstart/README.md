@@ -106,4 +106,4 @@ a module you build:
   project where the SDK is not yet initialized to exercise this key.
 - This is a quickstart, not a production integration. For the full setup (player
   identity, build ids, automatic performance capture, sampling) see the plugin
-  README and https://docs.framedash.dev/en/sdk/ue5.
+  README and https://docs.framedash.dev/en/sdk/unreal/.

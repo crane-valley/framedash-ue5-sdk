@@ -346,8 +346,10 @@ In your project's `Config/DefaultGame.ini`:
 [/Script/Framedash.FramedashSettings]
 ApiKey=your-api-key
 bAutoInitialize=True
-EndpointUrl=http://localhost:8787/v1/events
+EndpointUrl="http://localhost:8787/v1/events"
 ```
+
+> Quote the `EndpointUrl` value. An unquoted URL is truncated at `//` when UE reads the `.ini` (the value collapses to a bare `http:` / `https:`), which fails the endpoint check and silently drops every batch. UE strips the surrounding quotes on read, so the SDK sees the full URL.
 
 > The API key must exist in your local PostgreSQL `api_keys` table. Create one via the web dashboard at `http://localhost:3000`.
 
@@ -386,4 +388,10 @@ curl "http://localhost:8123/?database=framedash&query=SELECT+event_name,session_
 
 ### Switching Back to Production
 
-Remove or clear the `EndpointUrl` line from `DefaultGame.ini`. The SDK defaults to `https://ingest.framedash.dev/v1/events`.
+Delete the `EndpointUrl` line from `DefaultGame.ini` entirely. The SDK's compiled default is already `https://ingest.framedash.dev/v1/events`, so omitting the line is the cleanest way to point at production. Do not leave an empty `EndpointUrl=` (or blank the field in Project Settings): auto-init passes the configured value through as-is, so an empty value overrides the default with an empty endpoint that fails the check and drops every batch.
+
+To override the endpoint (for example a self-hosted ingest), keep the value quoted so UE does not truncate it at `//`:
+
+```ini
+EndpointUrl="https://ingest.example.com/v1/events"
+```
