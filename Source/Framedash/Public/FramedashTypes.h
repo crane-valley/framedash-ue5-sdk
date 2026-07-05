@@ -58,7 +58,20 @@ namespace FramedashConstants
 	constexpr float HeartbeatIntervalSeconds = 10.0f;
 	constexpr int32 MaxPayloadBytes = 102400; // 100 KB
 	constexpr int32 MaxRetries = 5;
-	constexpr float HttpTimeoutSeconds = 30.0f;
+	// Whole-request timeout. Bounded to 10s (not 30s) so a broken-IPv6 network -- a
+	// global AAAA advertised via Router Advertisement with no working route -- fails
+	// fast instead of stalling the flush for 30s. libcurl's default Happy Eyeballs
+	// (~200ms IPv4 fallback) is active through IHttpRequest, but the connect can
+	// still block up to the request timeout on some broken-IPv6 paths, and
+	// IHttpRequest exposes no portable way to tune address-family behavior.
+	// Mirrors the Unity SDK's 30s -> 10s bound (#1217).
+	// This is fail-fast, NOT a fallback: a timed-out batch is appended to the
+	// default-on offline queue and retried on the next run/initialization, once a
+	// run resolves a reachable IPv4; a permanently-broken-IPv6 client that never
+	// yields IPv4 still bounds at the persisted-queue cap. The complete fix
+	// (prefer-IPv4 transport) is deferred -- IHttpRequest exposes no portable
+	// CURLOPT_IPRESOLVE, so it needs a bespoke direct-socket path like Unity #1218.
+	constexpr float HttpTimeoutSeconds = 10.0f;
 	constexpr int32 MaxEventNameLength = 128;
 	constexpr int32 MaxAttributePairs = 50;
 	constexpr int32 MaxMetricPairs = 50;
@@ -87,5 +100,5 @@ namespace FramedashConstants
 }
 
 // String constants outside namespace to avoid UHT parsing issues with inline variables
-#define FRAMEDASH_SDK_VERSION TEXT("0.1.3")
+#define FRAMEDASH_SDK_VERSION TEXT("0.1.4")
 #define FRAMEDASH_SDK_NAME TEXT("ue5")

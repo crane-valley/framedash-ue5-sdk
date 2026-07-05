@@ -6,6 +6,22 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-07-05
+
+### Changed
+
+- Transport whole-request timeout bounded 30s -> 10s. On a broken-IPv6 network
+  (a global AAAA advertised via Router Advertisement with no working route)
+  the connect attempt may still block up to the request timeout; IHttpRequest
+  (libcurl) exposes no portable way to tune address-family behavior, so the
+  shorter timeout fails fast instead of stalling 30s. The offline queue (on by
+  default) keeps the timed-out batch so it is retried on the next
+  run/initialization, once a run resolves a reachable IPv4. This is fail-fast,
+  not an address-family fallback: a permanently-broken-IPv6 client that never
+  yields IPv4 still bounds at the persisted-queue cap. Mirrors the Unity SDK
+  fix (#1217); the full prefer-IPv4 transport (direct-socket path, like Unity
+  #1218) is deferred -- IHttpRequest exposes no portable CURLOPT_IPRESOLVE.
+
 ## [0.1.3] - 2026-07-05
 
 ### Fixed
