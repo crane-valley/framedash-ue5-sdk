@@ -13,6 +13,9 @@
 #include "FramedashFieldClamps.h"
 #include "FramedashStringUtil.h"
 #include "FramedashEngineCompat.h"
+#include "FramedashIoStats.h"
+#include "FramedashIoTrackingPlatformFile.h"
+#include "FramedashMapLoadTimer.h"
 
 #include "Async/Async.h"
 #include "Misc/EngineVersion.h"
@@ -62,6 +65,17 @@ void UFramedashSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UFramedashSubsystem::Deinitialize()
 {
+	// Balance this subsystem's Install() with exactly one Disable(). Enablement is
+	// reference-counted, so metering only actually stops once the LAST subsystem
+	// that wanted it shuts down -- a still-running GameInstance keeps it on. The
+	// wrapper stays chained either way (unchaining mid-run is unsafe); Disable() at
+	// zero only flips the atomic enabled flag. Skip entirely if this subsystem never
+	// installed, so it can never decrement another instance's count.
+	if (bTrackDiskIoInstalled)
+	{
+		FFramedashIoTrackingPlatformFile::Disable();
+		bTrackDiskIoInstalled = false;
+	}
 	ShutdownTelemetry();
 	DestroyComponents();
 	Super::Deinitialize();
@@ -207,6 +221,38 @@ void UFramedashSubsystem::InitializeInternal(const FString& ApiKey, const FStrin
 	const UFramedashSettings* Settings = GetDefault<UFramedashSettings>();
 	bOfflineQueueEnabled = !(Settings && !Settings->bEnableOfflineQueue);
 	bCaptureCameraRotation = Settings ? Settings->bCaptureCameraRotation : true;
+
+	// Opt-in disk-IO metering: chain the IPlatformFile read wrapper so io.* window
+	// metrics attach to perf_heartbeat. Installed once for the process lifetime and
+	// re-enabled on a re-init; failure is swallowed inside Install() (fail-safe).
+	// Enablement is reference-counted across GameInstances, so remember whether THIS
+	// subsystem installed and balance it with exactly one Disable() in Deinitialize.
+	// The manual ReportIoSample() feed works regardless of this setting. Reset the
+	// per-session io.* attach gates first so a fresh session starts clean.
+	bTrackDiskIoInstalled = false;
+	bIoManualFeedAccepted = false;
+
+	// Fresh map/level load-time timer per session so a Begin from a prior session can
+	// never complete into this one. The loaded map name is cleared alongside it.
+	MapLoadTimer = MakePimpl<Framedash::FMapLoadTimer>();
+	PendingMapLoadName.Empty();
+
+	if (Settings && Settings->bTrackDiskIo)
+	{
+		FFramedashIoTrackingPlatformFile::Install();
+		bTrackDiskIoInstalled = true;
+	}
+
+	// Seed this subsystem's IO baseline to the current process-global cumulative
+	// totals, so its first heartbeat window measures only reads from now on -- not
+	// the entire process history (which could be large, e.g. a late re-init after
+	// heavy loading) and not a stale baseline from a prior session.
+	{
+		const Framedash::FIoSnapshot IoNow = Framedash::GlobalIoStats().ReadCumulative();
+		IoBaselineBytes = IoNow.ReadBytes;
+		IoBaselineTimeMs = IoNow.ReadTimeMs;
+		IoBaselineOps = IoNow.ReadOps;
+	}
 	if (!bOfflineQueueEnabled)
 	{
 		PersistenceProvider = MakeShared<FNullPersistence, ESPMode::ThreadSafe>();
@@ -284,6 +330,7 @@ void UFramedashSubsystem::DestroyComponents()
 	Transport.Reset();
 	EventBuffer.Reset();
 	PersistenceProvider.Reset();
+	MapLoadTimer.Reset();
 }
 
 void UFramedashSubsystem::Track(
@@ -483,6 +530,109 @@ bool UFramedashSubsystem::RemoveEventSamplingRate(const FString& EventName)
 	if (!bInitialized || !SamplingPolicy.IsValid()) return false;
 	const FString NormalizedEventName = TruncateString(EventName, FramedashConstants::MaxEventNameLength);
 	return SamplingPolicy->RemoveEventRate(NormalizedEventName);
+}
+
+void UFramedashSubsystem::ReportIoSample(int64 Bytes, float ReadTimeMs, int32 Ops)
+{
+	// No-op until this subsystem is initialized, matching the other public tracking
+	// APIs. The accumulator is process-global, so feeding it from an uninitialized
+	// instance would contaminate sibling GameInstances -- so gate on bInitialized.
+	if (!bInitialized)
+	{
+		UE_LOG(LogFramedash, Warning, TEXT("SDK not initialized. Call InitializeTelemetry() before ReportIoSample()."));
+		return;
+	}
+
+	// Reject the WHOLE sample (no accumulation, no session accept) when any component
+	// is invalid, matching the Unity/Godot manual-feed contract: a garbage call must
+	// not activate io.* emission with misleading zero windows. A fully valid all-zero
+	// sample still accumulates and accepts (a quiet window from a live source is a
+	// real signal).
+	if (Bytes < 0 || Ops < 0 || !FMath::IsFinite(ReadTimeMs) || ReadTimeMs < 0.0f)
+	{
+		UE_LOG(LogFramedash, Warning, TEXT("ReportIoSample: invalid sample dropped (Bytes=%lld, ReadTimeMs=%f, Ops=%d)."), Bytes, ReadTimeMs, Ops);
+		return;
+	}
+
+	// Record that a manual feed was accepted THIS session so the heartbeat attaches
+	// io.* keys. This is session-scoped state (not the process-global accumulator),
+	// so a later untracked session in the same process does not inherit it.
+	bIoManualFeedAccepted = true;
+
+	// Feed the same process-wide window the IPlatformFile wrapper uses, so custom
+	// loaders / release builds contribute to io.* on the next heartbeat. Works even
+	// when bTrackDiskIo is off (no wrapper).
+	Framedash::FIoStatsAccumulator& IoStats = Framedash::GlobalIoStats();
+	IoStats.AddRead(static_cast<int64_t>(Bytes), static_cast<double>(ReadTimeMs));
+	IoStats.AddOps(static_cast<int64_t>(Ops));
+}
+
+void UFramedashSubsystem::BeginMapLoad(const FString& MapName)
+{
+	// No-op until initialized, matching the other public tracking APIs (MapLoadTimer
+	// is created in InitializeInternal). Fail-safe: this never throws into game code.
+	if (!bInitialized || !MapLoadTimer.IsValid())
+	{
+		return;
+	}
+	// The loaded map name lives beside the pure timer (which stays UE-free). A later
+	// BeginMapLoad before EndMapLoad replaces both -- the timer discards the old start,
+	// so this overwrite keeps the name consistent with the measurement it belongs to.
+	PendingMapLoadName = MapName;
+	MapLoadTimer->Begin(FPlatformTime::Seconds());
+}
+
+void UFramedashSubsystem::EndMapLoad()
+{
+	if (!bInitialized || !MapLoadTimer.IsValid())
+	{
+		return;
+	}
+	double ElapsedMs = 0.0;
+	// No-op when no BeginMapLoad is pending (End returns false without clearing state).
+	if (!MapLoadTimer->End(FPlatformTime::Seconds(), ElapsedMs))
+	{
+		return;
+	}
+	TrackMapLoad(PendingMapLoadName, ElapsedMs);
+}
+
+void UFramedashSubsystem::ReportMapLoad(const FString& MapName, double LoadTimeMs)
+{
+	if (!bInitialized)
+	{
+		return;
+	}
+	// Drop (do NOT clamp) a NaN / Infinity / negative report, matching the manual
+	// metric-feed contract shared with the Unity/Godot SDKs.
+	if (!Framedash::FMapLoadTimer::IsValidLoadTimeMs(LoadTimeMs))
+	{
+		return;
+	}
+	TrackMapLoad(MapName, LoadTimeMs);
+}
+
+void UFramedashSubsystem::TrackMapLoad(const FString& MapName, double LoadTimeMs)
+{
+	// Emit through the normal Track path (Player source) so the map_load event inherits
+	// sampling, field/attribute clamping (attribute-value truncation, finite-metric
+	// drop), buffering, and any active CI session attributes -- it is a regular event,
+	// not a heartbeat. map_id is left EMPTY (like perf_heartbeat) so this non-spatial
+	// event never lands in the spatial heatmap grid query or the activation gate (both
+	// key on a non-empty map_id); the loaded map name rides attributes["map_name"]
+	// instead, clamped to MaxAttributeValueLength by TrackWithData. The load time rides
+	// the metrics map as load_time_ms (no proto/ClickHouse field, mirroring the io.*
+	// attributes-map guardrail). MaxAttributePairs / MaxMetricPairs are far above the one
+	// entry each here, and TrackWithData drops a non-finite value, so no extra guard.
+	// Keys are plain TCHAR literals (not function-local static FStrings): map_load is
+	// rare, so the per-call FString construction is negligible, and a static FString's
+	// destructor can run after the engine allocator is torn down at shutdown.
+	TMap<FString, FString> Attributes;
+	Attributes.Add(TEXT("map_name"), MapName);
+	TMap<FString, double> Metrics;
+	Metrics.Add(TEXT("load_time_ms"), LoadTimeMs);
+	TrackWithData(TEXT("map_load"), TEXT(""), FVector::ZeroVector,
+		Attributes, Metrics, EFramedashTelemetrySource::Player);
 }
 
 void UFramedashSubsystem::Flush()
@@ -775,7 +925,51 @@ void UFramedashSubsystem::Tick(float /*DeltaTime*/)
 	if (TimeSinceLastHeartbeat >= FramedashConstants::HeartbeatIntervalSeconds)
 	{
 		TimeSinceLastHeartbeat = 0.0f;
-		Track(TEXT("perf_heartbeat"), TEXT(""), FVector::ZeroVector, EFramedashTelemetrySource::Automated);
+		// Attach the io.* window metrics ONLY when a collection source was active in
+		// THIS session: this subsystem REQUESTED metering (bTrackDiskIoInstalled --
+		// Install() was called; it is fail-safe/void, so success is not guaranteed)
+		// or a manual ReportIoSample was accepted this session (bIoManualFeedAccepted).
+		// Deliberately NOT the accumulator's process-global state -- UE Editor/PIE runs
+		// many sessions in one process, and a later session with tracking off must emit
+		// NO io.* (absent = not collected, distinct from a collected 0), even though the
+		// process-global counters may hold reads from an earlier session. Heartbeat-only
+		// -- no io.* on regular events. When inactive, the plain Track() path attaches
+		// nothing so the steady-state heartbeat keeps its zero-allocation path. The 3
+		// keys are well under MaxMetricPairs and TrackWithData clamps finiteness anyway.
+		if (bTrackDiskIoInstalled || bIoManualFeedAccepted)
+		{
+			// Non-destructive snapshot minus THIS subsystem's baseline = its window.
+			// Cumulative (not drain) so simultaneous GameInstances each see the full
+			// process-wide IO for their own interval instead of racing to drain it.
+			const Framedash::FIoSnapshot IoNow = Framedash::GlobalIoStats().ReadCumulative();
+			Framedash::FIoSnapshot IoBaseline;
+			IoBaseline.ReadBytes = IoBaselineBytes;
+			IoBaseline.ReadTimeMs = IoBaselineTimeMs;
+			IoBaseline.ReadOps = IoBaselineOps;
+			const Framedash::FIoSnapshot IoWindow = IoNow.Since(IoBaseline);
+			// Advance the baseline so the next window starts here.
+			IoBaselineBytes = IoNow.ReadBytes;
+			IoBaselineTimeMs = IoNow.ReadTimeMs;
+			IoBaselineOps = IoNow.ReadOps;
+			// Overwrite values in place via FindOrAdd with once-constructed keys (no
+			// Reset): the three FString map keys are allocated on the first active
+			// heartbeat only, and subsequent ones just update the doubles -- keeping
+			// the "only the first active heartbeat allocates" contract true.
+			static const FString IoKeyReadBytes(TEXT("io.read_bytes"));
+			static const FString IoKeyReadTimeMs(TEXT("io.read_time_ms"));
+			static const FString IoKeyReadOps(TEXT("io.read_ops"));
+			HeartbeatIoMetrics.FindOrAdd(IoKeyReadBytes) = static_cast<double>(IoWindow.ReadBytes);
+			HeartbeatIoMetrics.FindOrAdd(IoKeyReadTimeMs) = IoWindow.ReadTimeMs;
+			HeartbeatIoMetrics.FindOrAdd(IoKeyReadOps) = static_cast<double>(IoWindow.ReadOps);
+			TrackWithData(TEXT("perf_heartbeat"), TEXT(""), FVector::ZeroVector,
+				TMap<FString, FString>(), HeartbeatIoMetrics, EFramedashTelemetrySource::Automated);
+		}
+		else
+		{
+			// No IO source ever active: attach nothing (absent = not collected) and
+			// keep the steady-state heartbeat on the zero-allocation path.
+			Track(TEXT("perf_heartbeat"), TEXT(""), FVector::ZeroVector, EFramedashTelemetrySource::Automated);
+		}
 	}
 
 	if (FlushPolicy.IsValid() && FlushPolicy->ShouldFlush(/*bFlushRequested=*/false, TimeSinceLastFlush))

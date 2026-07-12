@@ -49,6 +49,17 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Capture", meta=(DisplayName="Capture Camera Rotation"))
 	bool bCaptureCameraRotation;
 
+	/**
+	 * If true, the SDK chains an IPlatformFile wrapper at init to count synchronous
+	 * disk-read bytes/time/ops and attach them as io.* metrics on perf_heartbeat.
+	 * OFF by default: wrapping the platform file layer is invasive, so it is opt-in
+	 * (fail-safe first). The IoDispatcher/IoStore path (zen loader, Nanite streaming)
+	 * bypasses IPlatformFile, so raw counters undercount Nanite-heavy IO. The manual
+	 * ReportIoSample() feed works regardless of this setting.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category="Capture", meta=(DisplayName="Track Disk IO"))
+	bool bTrackDiskIo;
+
 	/** Category path in Project Settings. */
 	virtual FName GetCategoryName() const override { return FName(TEXT("Plugins")); }
 };

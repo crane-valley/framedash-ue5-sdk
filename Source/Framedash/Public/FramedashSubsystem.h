@@ -17,6 +17,7 @@ class FFramedashPerformanceCollector;
 class FFramedashSamplingPolicy;
 class IPersistenceProvider;
 namespace Framedash { class FFlushPolicy; }
+namespace Framedash { class FMapLoadTimer; }
 
 /**
  * Main API for the Framedash Telemetry SDK.
@@ -119,6 +120,67 @@ public:
 		const TMap<FString, double>& Metrics,
 		EFramedashTelemetrySource Source = EFramedashTelemetrySource::Player);
 
+	/**
+	 * Manually report disk-read activity into the current perf_heartbeat window
+	 * (io.read_bytes / io.read_time_ms / io.read_ops). Use this for release builds
+	 * and custom loaders / VFS that the automatic IPlatformFile wrapper cannot see;
+	 * it works regardless of the bTrackDiskIo setting and accumulates into the same
+	 * window as the wrapper. The values are attached at the next heartbeat.
+	 * A sample with ANY negative / non-finite component is dropped in full (no
+	 * accumulation, no io.* activation) -- same contract as the Unity/Godot SDKs; a
+	 * fully valid all-zero sample still counts as an active quiet window.
+	 * No-op if the SDK is not initialized (call InitializeTelemetry() first): the IO
+	 * accumulator is process-global, so feeding it before init would contaminate
+	 * other GameInstances and make a later-initialized instance report io.* it never
+	 * collected.
+	 * @param Bytes        Bytes read since the last report.
+	 * @param ReadTimeMs   Wall time spent reading, in milliseconds.
+	 * @param Ops          Number of read operations.
+	 */
+	UFUNCTION(BlueprintCallable, Category="Framedash")
+	void ReportIoSample(int64 Bytes, float ReadTimeMs, int32 Ops);
+
+	/**
+	 * Begin timing a map/level load. Records MapName and a monotonic start timestamp
+	 * (FPlatformTime::Seconds -- real wall time, unaffected by pause / time dilation);
+	 * call EndMapLoad() when loading completes to emit a map_load event. The loaded map
+	 * name rides the attributes map as attributes["map_name"] and load_time_ms carries
+	 * the elapsed time; map_id is left EMPTY (like perf_heartbeat) so this non-spatial
+	 * event never lands in the spatial heatmap or the activation gate. Calling BeginMapLoad
+	 * again before EndMapLoad REPLACES the pending measurement (the earlier one is
+	 * discarded). Fail-safe (never throws into game code). No-op if the SDK is not
+	 * initialized. GAME THREAD ONLY: the Track path reads game-thread-only perf/collector
+	 * state, so a call from an async loader thread would race and is unsupported.
+	 */
+	UFUNCTION(BlueprintCallable, Category="Framedash")
+	void BeginMapLoad(const FString& MapName);
+
+	/**
+	 * Complete the map/level load started by BeginMapLoad and emit a map_load event
+	 * (attributes["map_name"] = the stored map name, metrics load_time_ms = elapsed
+	 * milliseconds, map_id empty) via the normal Track path (sampling, buffering, session
+	 * attributes). No-op if no BeginMapLoad is pending or the SDK is not initialized.
+	 * Fail-safe. GAME THREAD ONLY (same reason as BeginMapLoad).
+	 */
+	UFUNCTION(BlueprintCallable, Category="Framedash")
+	void EndMapLoad();
+
+	/**
+	 * Directly report a map/level load time for developers who measure it themselves
+	 * (custom loaders / streaming), bypassing the Begin/End timer. Emits the same map_load
+	 * event shape (attributes["map_name"] = MapName, metrics load_time_ms = LoadTimeMs,
+	 * map_id empty). A NaN / Infinity / negative LoadTimeMs is DROPPED (the whole call, not
+	 * clamped), matching the manual metric-feed contract; the map name is clamped to the
+	 * ingest attribute-value cap. Fail-safe. No-op if the SDK is not initialized. GAME
+	 * THREAD ONLY: report from the game thread once your async load completes (a call from
+	 * the loader thread would race TrackWithData + the perf collector); this is resolved by
+	 * contract, not by marshaling.
+	 * @param MapName     Identifier of the loaded map/level (rides attributes["map_name"]).
+	 * @param LoadTimeMs  Measured load time in milliseconds.
+	 */
+	UFUNCTION(BlueprintCallable, Category="Framedash")
+	void ReportMapLoad(const FString& MapName, double LoadTimeMs);
+
 	/** Flush all buffered events immediately. */
 	UFUNCTION(BlueprintCallable, Category="Framedash")
 	void Flush();
@@ -159,6 +221,17 @@ private:
 	/** Truncate string to max length. */
 	static FString TruncateString(const FString& Input, int32 MaxLength);
 
+	/**
+	 * Emit the map_load event via the normal Track path (sampling, buffering, session
+	 * attributes). map_id stays EMPTY (keeps map_load out of spatial heatmap and
+	 * activation paths); MapName rides attributes["map_name"] and the load time
+	 * rides the metrics map as
+	 * load_time_ms (no proto/ClickHouse field, mirroring the io.* attributes-map
+	 * guardrail). A non-finite LoadTimeMs is dropped by TrackWithData's finite-metric
+	 * guard, matching the drop-not-clamp rule for the direct feed.
+	 */
+	void TrackMapLoad(const FString& MapName, double LoadTimeMs);
+
 	/** Refresh the cached camera rotation on the game thread (called from Tick). */
 	void UpdateCachedCameraRotation();
 
@@ -173,6 +246,13 @@ private:
 	TPimplPtr<FFramedashPerformanceCollector> PerformanceCollector;
 	TPimplPtr<FFramedashSamplingPolicy> SamplingPolicy;
 	TPimplPtr<Framedash::FFlushPolicy> FlushPolicy;
+	// Pending map/level load-time measurement (BeginMapLoad/EndMapLoad). The pure timer
+	// holds only the monotonic start timestamp + pending flag (engine-free, GoogleTest-
+	// covered); the loaded map NAME lives beside it as an FString so the timer header
+	// stays UE-free. Both are game-thread only (set/read from the public map-load API),
+	// like the other cached session state. Recreated on each (re-)init.
+	TPimplPtr<Framedash::FMapLoadTimer> MapLoadTimer;
+	FString PendingMapLoadName;
 	TSharedPtr<IPersistenceProvider, ESPMode::ThreadSafe> PersistenceProvider;
 	struct FInFlightBatch
 	{
@@ -221,6 +301,42 @@ private:
 	bool bWarnedEmptyPlayerId = false;
 	bool bOfflineQueueEnabled = true;
 	bool bCaptureCameraRotation = true;
+
+	// Reused scratch map for the io.* window metrics attached to perf_heartbeat.
+	// Held as a member (not a per-heartbeat local) so the 3-entry buffer's bucket
+	// allocation is reused across heartbeats once disk-IO collection is active --
+	// only the first active heartbeat allocates. Game-thread only (Tick). Empty and
+	// untouched while no IO source is active, so the default heartbeat path stays
+	// zero-allocation.
+	TMap<FString, double> HeartbeatIoMetrics;
+
+	// This subsystem's own baseline snapshot of the process-global cumulative IO
+	// counters (Framedash::GlobalIoStats). The heartbeat computes its window as
+	// cumulative - baseline, then advances the baseline. Kept as scalars (not the
+	// Private FIoSnapshot type) so this Public header pulls in no Private header
+	// for external game code. Game-thread only (Tick). With multiple simultaneous
+	// GameInstances each subsystem holds an independent baseline, so every instance
+	// reports the same process-wide IO for its own interval (no destructive drain).
+	int64 IoBaselineBytes = 0;
+	double IoBaselineTimeMs = 0.0;
+	int64 IoBaselineOps = 0;
+
+	// True when THIS subsystem requested disk-IO metering (bTrackDiskIo was set at
+	// its init and Install() was called -- Install is fail-safe/void, so this does
+	// NOT guarantee the wrapper actually installed). Deinitialize calls Disable()
+	// only when true, balancing the ref-counted enablement so shutting one
+	// GameInstance down does not stop metering for others still running (see
+	// FFramedashIoTrackingPlatformFile).
+	bool bTrackDiskIoInstalled = false;
+
+	// True once a manual ReportIoSample was ACCEPTED during THIS session (set on the
+	// accepted path, reset in InitializeInternal). Together with bTrackDiskIoInstalled
+	// this gates the heartbeat io.* attach on SESSION-scoped state, so a later
+	// telemetry session in the same process (UE Editor/PIE) with disk-IO tracking off
+	// and no manual feed attaches NO io.* keys -- honoring "absent = not collected"
+	// even though the process-global accumulator may have been fed by an earlier
+	// session. Not the accumulator's business (it is process-wide), so tracked here.
+	bool bIoManualFeedAccepted = false;
 
 	// Camera rotation sampled on the game thread (Tick) and read in
 	// CaptureCameraRotation. The lock guards the pair so it is always read coherently.

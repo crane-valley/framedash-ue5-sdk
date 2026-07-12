@@ -121,6 +121,61 @@ When **Capture Camera Rotation** is enabled (the default), every event records t
 
 Disable it under **Project Settings > Plugins > Framedash > Capture Camera Rotation**, or set `bCaptureCameraRotation=False` in `Config/DefaultGame.ini`.
 
+## Disk I/O Metrics
+
+When **Track Disk IO** is enabled (`bTrackDiskIo`, **off by default**), the SDK chains a lightweight `IPlatformFile` wrapper at initialization that counts synchronous disk reads, and attaches the window totals since the previous heartbeat as metrics on each `perf_heartbeat` event:
+
+| Metric key | Meaning |
+|------------|---------|
+| `io.read_bytes` | Bytes read since the last heartbeat |
+| `io.read_time_ms` | Wall time spent in reads, in milliseconds |
+| `io.read_ops` | Number of read operations |
+
+These ride in the generic metrics map (no proto/schema change), so query them via the data-export / query REST API (e.g. `metrics['io.read_bytes']`). First-class `perf-diff` build-over-build comparison of `io.*` is Phase 2; the `framedash perf-diff` / builds-compare API currently compares only `frame_time`, `memory`, and `gpu_time`. The keys are attached **only** when the session enabled a collection source -- `bTrackDiskIo` was on, or `ReportIoSample` was accepted this session -- and **only** on `perf_heartbeat` events; an absent key means "not collected" (distinct from a collected `0`).
+
+The counters are process-wide and cumulative: each heartbeat reports the read volume in that window (cumulative minus the previous heartbeat's baseline). With multiple simultaneous `GameInstance`s (e.g. multi-client PIE) each instance keeps its own baseline, so every instance reports the same process-wide I/O for its own interval rather than one instance draining the window from the others.
+
+The attach decision is **session-scoped**, not process-lifetime: in a single process that runs several telemetry sessions (typical of the UE Editor / PIE), a later session with disk-IO tracking off and no manual feed emits **no** `io.*` keys even if an earlier session in the same process collected I/O.
+
+Enable it under **Project Settings > Plugins > Framedash > Track Disk IO**, or set `bTrackDiskIo=True` in `Config/DefaultGame.ini`. It is opt-in because wrapping the platform file layer is invasive; a failed install is swallowed and never disrupts the game. The wrapper is installed once and is never unchained -- shutting a subsystem down only stops counting once the last instance that enabled it shuts down (enablement is reference-counted).
+
+**IoDispatcher / Nanite bypass caveat:** the IoDispatcher/IoStore path (zen loader, Nanite streaming, bulk data) and async reads bypass `IPlatformFile` on some platforms, so the automatic counters **undercount** Nanite-heavy or async-streamed I/O. Nanite-specific streaming metrics are deferred to a later phase.
+
+**Self-exclusion caveat:** the SDK's own offline-queue file (`Project/Saved/Framedash/offline-queue.json`) is read through the same wrapper, so the SDK excludes its own persistence reads from the counters (via a thread-local suppression scope around the read). This prevents a false `io.read_*` spike in sessions that recover persisted telemetry; those reads are therefore not reflected in `io.*`.
+
+### Manual feed (`ReportIoSample`)
+
+For Shipping builds, custom loaders, or a virtual file system the wrapper cannot see, report reads yourself. This accumulates into the same heartbeat window and works **regardless** of the `bTrackDiskIo` setting:
+
+```cpp
+if (UFramedashSubsystem* Framedash = GetGameInstance()->GetSubsystem<UFramedashSubsystem>())
+{
+    // Bytes read, wall time in ms, and number of read operations for a load.
+    Framedash->ReportIoSample(/*Bytes=*/1048576, /*ReadTimeMs=*/12.5f, /*Ops=*/8);
+}
+```
+
+A sample with any negative or non-finite component is dropped in full (no accumulation, no io.* activation) -- same contract as the Unity and Godot SDKs -- so a bad sample can neither poison the window nor activate misleading zero windows.
+
+## Map/Level Load-Time
+
+Measure how long a level takes to load and emit it as a `map_load` event. The load time rides the generic metrics map (`load_time_ms`) and the loaded map name rides the attributes map as `attributes["map_name"]`. `map_id` is left **empty** on purpose (like `perf_heartbeat`): a `map_load` has no world position, so an empty `map_id` keeps it out of the spatial heatmap and the activation gate, which key on a non-empty `map_id`. There is no dedicated proto or ClickHouse column yet (web/CLI charts, grouped by `attributes['map_name']`, and `perf-diff` gating land in a follow-up PR). Query it today via the data-export / query REST API (e.g. `metrics['load_time_ms']`). The event flows through the normal `Track` path, so it is sampled and buffered like any other event. All three methods are Blueprint-callable, fail-safe (never disrupt the game), no-ops before initialization, and **game-thread only** (the Track path reads game-thread-only perf state -- dispatch back to the game thread if a custom loader completes on a worker thread).
+
+```cpp
+if (UFramedashSubsystem* Framedash = GetGameInstance()->GetSubsystem<UFramedashSubsystem>())
+{
+    // Time a load with the built-in timer:
+    Framedash->BeginMapLoad(TEXT("world_1"));
+    // ... load the level ...
+    Framedash->EndMapLoad();   // emits map_load (map_name="world_1", load_time_ms=elapsed)
+
+    // Or report a time you measured yourself (custom/streaming loaders):
+    Framedash->ReportMapLoad(TEXT("world_1"), /*LoadTimeMs=*/842.0);
+}
+```
+
+The timer uses a monotonic wall clock (`FPlatformTime::Seconds`), so a paused game or time dilation does not distort the measurement. Calling `BeginMapLoad` again before `EndMapLoad` replaces the pending measurement; `EndMapLoad` with no pending `BeginMapLoad` is a no-op. A NaN/Infinity/negative `ReportMapLoad` time is dropped (not clamped).
+
 ## Quick Start
 
 ### 1. Add Plugin to Your Project

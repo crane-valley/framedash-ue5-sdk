@@ -62,12 +62,21 @@ cmake --build sdks/ue5/Tests/build
 ctest --test-dir sdks/ue5/Tests/build --output-on-failure
 ```
 
+## CI
+
+This harness runs on every UE5 SDK change in `.github/workflows/ue5-ci.yml`
+(the `googletest` job) on the self-hosted Windows runner, using the
+VS-bundled CMake resolved via `vswhere` and the `Visual Studio 18 2026`
+generator (Release config). The same workflow also runs a RunUAT
+`BuildPlugin` matrix that compiles the full plugin against installed engines.
+
 ## What this does NOT cover
 
-- The full UE5 plugin compile (verified separately by the `pnpm build`
-  pipeline once a UE5 CI matrix lands -- see PLANS.md Phase 1.5)
-- Anything that needs `FString`, `TArray`, HTTP module, etc. -- those
-  classes still rely on UnrealEditor automation tests when added
+- The full UE5 plugin compile (covered by the RunUAT `BuildPlugin` matrix in
+  `.github/workflows/ue5-ci.yml`, not by this harness)
+- Runtime behavior of anything that needs `FString`, `TArray`, HTTP module,
+  etc. -- those classes still rely on UnrealEditor automation tests (an
+  Automation Spec job, not yet added -- see PLANS.md Phase 1.5)
 
 The contract is: anything in `Source/Framedash/Private/Framedash*Policy.{h,cpp}`,
 `FramedashProtobufSerializer.{h,cpp}`, and `FramedashUuid.{h,cpp}` must stay

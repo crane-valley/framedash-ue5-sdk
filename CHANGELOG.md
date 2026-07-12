@@ -6,6 +6,31 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-12
+
+### Added
+
+- Map/level load-time capture: `BeginMapLoad(MapName)` / `EndMapLoad()`
+  Blueprint-callable functions time a load on `FPlatformTime::Seconds`
+  (monotonic real wall time, unaffected by pause / time dilation), and
+  `ReportMapLoad(MapName, LoadTimeMs)` lets a custom loader report a load time
+  directly. Both paths emit a `map_load` auto event carrying
+  `metrics["load_time_ms"]` and `attributes["map_name"]`; `map_id` is
+  deliberately left empty so the event stays out of the spatial heatmap grid
+  and the activation gate. `ReportMapLoad` drops (does not clamp) a NaN,
+  Infinity, or negative `LoadTimeMs`. Calling `BeginMapLoad` again before
+  `EndMapLoad` replaces the pending measurement. Game-thread only; fail-safe
+  (never throws, no-op if the SDK is not initialized).
+- `io.*` disk metrics: a new opt-in `bTrackDiskIo` project setting (Project
+  Settings > Framedash, default OFF) chains an `IPlatformFile` wrapper at init
+  that counts synchronous disk-read bytes/time/ops and attaches them as
+  `io.read_bytes` / `io.read_time_ms` / `io.read_ops` (deltas since the
+  previous heartbeat) on `perf_heartbeat`. Wrapping the platform file layer is
+  invasive, so it stays opt-in; the IoDispatcher/IoStore path (zen loader,
+  Nanite streaming) bypasses `IPlatformFile`, so raw counters undercount
+  Nanite-heavy IO. `ReportIoSample(Bytes, ReadTimeMs, Ops)` is
+  Blueprint-callable and works regardless of the `bTrackDiskIo` setting.
+
 ## [0.1.5] - 2026-07-05
 
 ### Added

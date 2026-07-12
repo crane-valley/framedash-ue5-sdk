@@ -3,6 +3,7 @@
 #include "FramedashPersistenceProvider.h"
 #include "Framedash.h"
 #include "FramedashEngineCompat.h"
+#include "FramedashIoStats.h"
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
@@ -370,6 +371,13 @@ bool FFilePersistence::ClearFromDisk() const
 
 TArray<FFramedashEvent> FFilePersistence::LoadFromDisk() const
 {
+	// Suppress disk-IO metering for the SDK's OWN offline-queue read on this
+	// thread: recovering/maintaining persisted telemetry must not be reported as
+	// game io.read_* (see FFramedashIoTrackingPlatformFile). The read below
+	// (FFileHelper::LoadFileToString) is synchronous on the calling thread, so this
+	// scope precisely covers it. No-op cost when disk-IO tracking is off.
+	Framedash::FIoMeteringSuppressionScope IoMeteringSuppress;
+
 	TArray<FFramedashEvent> Events;
 
 	if (!IFileManager::Get().FileExists(*QueueFilePath))

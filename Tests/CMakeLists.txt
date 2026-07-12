@@ -38,6 +38,8 @@ add_executable(framedash_ue5_tests
 	CameraMathTests.cpp
 	EndpointSecurityTests.cpp
 	FramedashFieldClampsTests.cpp
+	FramedashIoStatsTests.cpp
+	FramedashMapLoadTimerTests.cpp
 	FlushPolicyTests.cpp
 	ProtobufSerializerTests.cpp
 	RawHttpTests.cpp
