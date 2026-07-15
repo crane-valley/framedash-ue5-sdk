@@ -243,6 +243,18 @@ void UFramedashSubsystem::InitializeInternal(const FString& ApiKey, const FStrin
 		bTrackDiskIoInstalled = true;
 	}
 
+	// Latch the memory-detail setting for this session. A later session with the
+	// setting off emits no mem.* keys even if an earlier session in the same process
+	// collected them. Start the session blind (no cached sample) so a fresh session
+	// never attaches stale mem.* from a prior one.
+	bTrackMemoryDetail = Settings && Settings->bTrackMemoryDetail;
+	bMemorySampleValid = false;
+	CachedMemMask = 0;
+	// Start the persistent heartbeat map clean for a fresh session (this subsystem may
+	// be re-initialized in the same process) and clear the mem key-set diff state.
+	HeartbeatMetrics.Reset();
+	PrevMemHeartbeatMask = 0;
+
 	// Seed this subsystem's IO baseline to the current process-global cumulative
 	// totals, so its first heartbeat window measures only reads from now on -- not
 	// the entire process history (which could be large, e.g. a late re-init after
@@ -491,16 +503,67 @@ void UFramedashSubsystem::TrackWithData(
 		}
 	}
 
-	// Copy metrics, enforcing the ingest caps client-side (count, key length,
-	// finite values). Non-finite metric values are rejected by ingest, so drop
-	// them; empty keys are skipped. Guard on the map's actual size (see attributes
-	// above) so truncated-key collisions cannot stop the loop short.
+	// Copy caller metrics FIRST, enforcing the ingest caps client-side (count, key
+	// length, finite values). Non-finite metric values are rejected by ingest, so drop
+	// them; empty keys are skipped. Caller metrics take priority for the whole
+	// MaxMetricPairs budget: this loop is identical to the pre-mem.* behavior, so a
+	// caller that fills the cap keeps exactly the events it did before this feature
+	// (the SDK-injected mem.* below only use the LEFTOVER capacity). Guard on the map's
+	// actual size (see attributes above) so truncated-key collisions cannot stop the
+	// loop short.
 	for (const auto& Pair : Metrics)
 	{
 		if (Evt.Metrics.Num() >= FramedashConstants::MaxMetricPairs) break;
 		if (Pair.Key.IsEmpty()) continue;
 		if (!FMath::IsFinite(Pair.Value)) continue;
 		Evt.Metrics.Add(TruncateString(Pair.Key, FramedashConstants::MaxMetricKeyLength), Pair.Value);
+	}
+
+	// Spatial-heatmap mem.* attach: perf_heartbeat is position-less (empty map_id), so
+	// the heatmap grid queries (which key on map_id + cell bounds) never see the
+	// heartbeat's mem.*. Mirror the cached memory sample onto position-qualified events
+	// (non-empty map_id) so per-cell memory heatmaps have data. Opt-in
+	// (bTrackMemoryDetail, default OFF) so default sessions keep the zero-alloc event
+	// path untouched. Attached AFTER caller metrics: the caller ALWAYS wins -- a key the
+	// caller already set is skipped (Contains), and mem.* only fill the capacity left
+	// after the caller loop, so a caller that fills MaxMetricPairs drops NO metrics and
+	// gains NO mem.* (same as before this feature). This mirrors the host-tested
+	// SelectAttachableMemoryEntries rule. The heartbeat has an empty map_id, so it is
+	// not double-stamped here -- it already carries mem.* via the Metrics argument.
+	if (bTrackMemoryDetail && !Evt.MapId.IsEmpty())
+	{
+		// Lazily take the FIRST sample here if no heartbeat has sampled yet this
+		// session, so the initial ~10s window is not blind. At most one engine read
+		// per session on the event path (guarded by bMemorySampleValid); every later
+		// qualifying event only reads cached doubles (no sampling, no key building).
+		if (!bMemorySampleValid)
+		{
+			RefreshMemorySample();
+		}
+		// Fill the remaining slots in the CANONICAL order (vram, textures, meshes,
+		// audio). Order MUST match the pure SelectAttachableMemoryEntries /
+		// CollectMemoryMetricEntries contract the GoogleTest cases pin -- otherwise a
+		// near-cap caller could get textures/audio while mem.vram (the highest-priority
+		// key, and the one the heatmap needs most) is dropped. Caller wins: a key the
+		// caller already set is skipped and does not consume capacity; a key whose bit is
+		// clear in this sample stays absent. Allocation here is fine (per-event Track
+		// carrying metrics).
+		static const FString MemKeyVram(TEXT(FRAMEDASH_MEM_KEY_VRAM));
+		static const FString MemKeyTextures(TEXT(FRAMEDASH_MEM_KEY_TEXTURES));
+		static const FString MemKeyMeshes(TEXT(FRAMEDASH_MEM_KEY_MESHES));
+		static const FString MemKeyAudio(TEXT(FRAMEDASH_MEM_KEY_AUDIO));
+		const uint32 Bits[] = {
+			Framedash::kMemBitVram, Framedash::kMemBitTextures,
+			Framedash::kMemBitMeshes, Framedash::kMemBitAudio };
+		const FString* const Keys[] = { &MemKeyVram, &MemKeyTextures, &MemKeyMeshes, &MemKeyAudio };
+		const double Values[] = { CachedMemVram, CachedMemTextures, CachedMemMeshes, CachedMemAudio };
+		for (int32 Index = 0; Index < 4; ++Index)
+		{
+			if (Evt.Metrics.Num() >= FramedashConstants::MaxMetricPairs) break;
+			if ((CachedMemMask & Bits[Index]) == 0) continue;
+			if (Evt.Metrics.Contains(*Keys[Index])) continue;
+			Evt.Metrics.Add(*Keys[Index], Values[Index]);
+		}
 	}
 
 	if (bCaptureCameraRotation)
@@ -896,6 +959,26 @@ void UFramedashSubsystem::CaptureCameraRotation(FFramedashEvent& Evt) const
 	}
 }
 
+void UFramedashSubsystem::RefreshMemorySample()
+{
+	if (!PerformanceCollector.IsValid())
+	{
+		return;
+	}
+	// Thin engine reads -> engine-independent selection -> SCALAR cache. Storing into
+	// scalars (mask + doubles) instead of a TMap keeps this allocation-free, which is
+	// required because this runs on the zero-alloc heartbeat path. An absent category
+	// clears its bit, so it stays absent everywhere the cache is read.
+	const Framedash::FMemoryMetrics Mem =
+		Framedash::SelectMemoryMetrics(PerformanceCollector->SampleMemoryDetail());
+	CachedMemMask = Framedash::MemoryPresenceMask(Mem);
+	CachedMemVram = static_cast<double>(Mem.Vram);
+	CachedMemTextures = static_cast<double>(Mem.Textures);
+	CachedMemMeshes = static_cast<double>(Mem.Meshes);
+	CachedMemAudio = static_cast<double>(Mem.Audio);
+	bMemorySampleValid = true;
+}
+
 void UFramedashSubsystem::Tick(float /*DeltaTime*/)
 {
 	// Drive the flush/heartbeat cadence from REAL wall-clock time, not the
@@ -925,17 +1008,21 @@ void UFramedashSubsystem::Tick(float /*DeltaTime*/)
 	if (TimeSinceLastHeartbeat >= FramedashConstants::HeartbeatIntervalSeconds)
 	{
 		TimeSinceLastHeartbeat = 0.0f;
-		// Attach the io.* window metrics ONLY when a collection source was active in
-		// THIS session: this subsystem REQUESTED metering (bTrackDiskIoInstalled --
-		// Install() was called; it is fail-safe/void, so success is not guaranteed)
-		// or a manual ReportIoSample was accepted this session (bIoManualFeedAccepted).
-		// Deliberately NOT the accumulator's process-global state -- UE Editor/PIE runs
-		// many sessions in one process, and a later session with tracking off must emit
-		// NO io.* (absent = not collected, distinct from a collected 0), even though the
-		// process-global counters may hold reads from an earlier session. Heartbeat-only
-		// -- no io.* on regular events. When inactive, the plain Track() path attaches
-		// nothing so the steady-state heartbeat keeps its zero-allocation path. The 3
-		// keys are well under MaxMetricPairs and TrackWithData clamps finiteness anyway.
+
+		// The persistent HeartbeatMetrics map is maintained IN PLACE (never Reset here)
+		// so the steady-state heartbeat allocates no heap (CLAUDE.md rule). io.* keys are
+		// overwritten via FindOrAdd; mem.* keys are diffed so only a key-set transition
+		// touches the map. All keys are well under MaxMetricPairs and TrackWithData
+		// clamps finiteness anyway.
+
+		// io.* window metrics: attached ONLY when a collection source was active in
+		// THIS session -- this subsystem REQUESTED metering (bTrackDiskIoInstalled --
+		// Install() is fail-safe/void, so success is not guaranteed) or a manual
+		// ReportIoSample was accepted this session (bIoManualFeedAccepted). Deliberately
+		// NOT the accumulator's process-global state -- UE Editor/PIE runs many sessions
+		// in one process, and a later session with tracking off must emit NO io.*
+		// (absent = not collected, distinct from a collected 0), even though the
+		// process-global counters may hold reads from an earlier session.
 		if (bTrackDiskIoInstalled || bIoManualFeedAccepted)
 		{
 			// Non-destructive snapshot minus THIS subsystem's baseline = its window.
@@ -951,23 +1038,59 @@ void UFramedashSubsystem::Tick(float /*DeltaTime*/)
 			IoBaselineBytes = IoNow.ReadBytes;
 			IoBaselineTimeMs = IoNow.ReadTimeMs;
 			IoBaselineOps = IoNow.ReadOps;
-			// Overwrite values in place via FindOrAdd with once-constructed keys (no
-			// Reset): the three FString map keys are allocated on the first active
-			// heartbeat only, and subsequent ones just update the doubles -- keeping
-			// the "only the first active heartbeat allocates" contract true.
+			// FindOrAdd overwrites the doubles in place: io.* keys never disappear once
+			// active (they are the same 3 every heartbeat), so only the first active
+			// heartbeat allocates the FString keys and steady state is zero-alloc.
 			static const FString IoKeyReadBytes(TEXT("io.read_bytes"));
 			static const FString IoKeyReadTimeMs(TEXT("io.read_time_ms"));
 			static const FString IoKeyReadOps(TEXT("io.read_ops"));
-			HeartbeatIoMetrics.FindOrAdd(IoKeyReadBytes) = static_cast<double>(IoWindow.ReadBytes);
-			HeartbeatIoMetrics.FindOrAdd(IoKeyReadTimeMs) = IoWindow.ReadTimeMs;
-			HeartbeatIoMetrics.FindOrAdd(IoKeyReadOps) = static_cast<double>(IoWindow.ReadOps);
+			HeartbeatMetrics.FindOrAdd(IoKeyReadBytes) = static_cast<double>(IoWindow.ReadBytes);
+			HeartbeatMetrics.FindOrAdd(IoKeyReadTimeMs) = IoWindow.ReadTimeMs;
+			HeartbeatMetrics.FindOrAdd(IoKeyReadOps) = static_cast<double>(IoWindow.ReadOps);
+		}
+
+		// mem.* memory-detail metrics: session-scoped like io.* (bTrackMemoryDetail
+		// latched at init). Refresh the (scalar) cache at this cadence, then update the
+		// persistent map by DIFF so steady state (same key set as last heartbeat) is
+		// zero-alloc: a still-present key is overwritten via FindOrAdd (no alloc), a
+		// vanished key is Removed, and only a genuinely new key allocates -- the rare
+		// transition cost is the deliberate trade-off vs. rebuilding every heartbeat. The
+		// same scalar cache is mirrored onto position-qualified events in TrackWithData so
+		// the spatial heatmap grid (which never sees the position-less heartbeat) can
+		// surface per-cell memory. mem.vram works without LLM; category keys are present
+		// only when LLM is enabled and the tag reports a positive amount -- an unavailable
+		// source stays absent (never a fabricated 0).
+		if (bTrackMemoryDetail)
+		{
+			RefreshMemorySample();
+			static const FString MemKeyVram(TEXT(FRAMEDASH_MEM_KEY_VRAM));
+			static const FString MemKeyTextures(TEXT(FRAMEDASH_MEM_KEY_TEXTURES));
+			static const FString MemKeyMeshes(TEXT(FRAMEDASH_MEM_KEY_MESHES));
+			static const FString MemKeyAudio(TEXT(FRAMEDASH_MEM_KEY_AUDIO));
+			// Remove keys present last heartbeat but gone now (Remove does not allocate).
+			const uint32 StaleMask = Framedash::StaleMemoryKeysMask(PrevMemHeartbeatMask, CachedMemMask);
+			if (StaleMask & Framedash::kMemBitVram) { HeartbeatMetrics.Remove(MemKeyVram); }
+			if (StaleMask & Framedash::kMemBitTextures) { HeartbeatMetrics.Remove(MemKeyTextures); }
+			if (StaleMask & Framedash::kMemBitMeshes) { HeartbeatMetrics.Remove(MemKeyMeshes); }
+			if (StaleMask & Framedash::kMemBitAudio) { HeartbeatMetrics.Remove(MemKeyAudio); }
+			// Overwrite/insert currently-present keys (alloc only when a key is new).
+			if (CachedMemMask & Framedash::kMemBitVram) { HeartbeatMetrics.FindOrAdd(MemKeyVram) = CachedMemVram; }
+			if (CachedMemMask & Framedash::kMemBitTextures) { HeartbeatMetrics.FindOrAdd(MemKeyTextures) = CachedMemTextures; }
+			if (CachedMemMask & Framedash::kMemBitMeshes) { HeartbeatMetrics.FindOrAdd(MemKeyMeshes) = CachedMemMeshes; }
+			if (CachedMemMask & Framedash::kMemBitAudio) { HeartbeatMetrics.FindOrAdd(MemKeyAudio) = CachedMemAudio; }
+			PrevMemHeartbeatMask = CachedMemMask;
+		}
+
+		if (HeartbeatMetrics.Num() > 0)
+		{
+			// Heartbeat-only attach -- no io.*/mem.* on regular events.
 			TrackWithData(TEXT("perf_heartbeat"), TEXT(""), FVector::ZeroVector,
-				TMap<FString, FString>(), HeartbeatIoMetrics, EFramedashTelemetrySource::Automated);
+				TMap<FString, FString>(), HeartbeatMetrics, EFramedashTelemetrySource::Automated);
 		}
 		else
 		{
-			// No IO source ever active: attach nothing (absent = not collected) and
-			// keep the steady-state heartbeat on the zero-allocation path.
+			// No source active: attach nothing (absent = not collected) and keep the
+			// steady-state heartbeat on the zero-allocation Track() path.
 			Track(TEXT("perf_heartbeat"), TEXT(""), FVector::ZeroVector, EFramedashTelemetrySource::Automated);
 		}
 	}

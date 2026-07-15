@@ -1,3 +1,6 @@
+/* Copyright 2026 Crane Valley. Distributed as part of Framedash. */
+/* nanopb - Copyright (c) 2011 Petteri Aimonen <jpa at nanopb.mail.kapsi.fi> */
+/* zlib license - see LICENSE.txt in this directory. */
 /* pb_encode.c -- encode a protobuf using minimal resources
  *
  * 2011 Petteri Aimonen <jpa@kapsi.fi>

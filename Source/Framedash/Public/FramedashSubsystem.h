@@ -238,6 +238,14 @@ private:
 	/** Stamp Evt.CameraYaw/CameraPitch from the thread-safe cached snapshot. */
 	void CaptureCameraRotation(FFramedashEvent& Evt) const;
 
+	// Sample memory detail (engine reads) and store it into the scalar cache
+	// (CachedMemMask + per-category doubles) from the engine-independent selection.
+	// Allocation-free (no map), so it is safe to call on the zero-alloc heartbeat path.
+	// Called at the heartbeat cadence and lazily on the first position-qualified event.
+	// Sets bMemorySampleValid. Defined in the .cpp where the Private
+	// FramedashMemorySample.h / collector are visible.
+	void RefreshMemorySample();
+
 	// TPimplPtr type-erases the deleter at construction time, so forward-declared
 	// (incomplete) types work without C4150 on MSVC. No out-of-line destructor needed.
 	TPimplPtr<FFramedashEventBuffer> EventBuffer;
@@ -302,13 +310,22 @@ private:
 	bool bOfflineQueueEnabled = true;
 	bool bCaptureCameraRotation = true;
 
-	// Reused scratch map for the io.* window metrics attached to perf_heartbeat.
-	// Held as a member (not a per-heartbeat local) so the 3-entry buffer's bucket
-	// allocation is reused across heartbeats once disk-IO collection is active --
-	// only the first active heartbeat allocates. Game-thread only (Tick). Empty and
-	// untouched while no IO source is active, so the default heartbeat path stays
-	// zero-allocation.
-	TMap<FString, double> HeartbeatIoMetrics;
+	// Persistent map for the metrics attached to perf_heartbeat (io.* window totals and
+	// mem.* memory detail). Held as a member and maintained IN PLACE across heartbeats
+	// -- NOT Reset()+rebuilt -- so the steady-state heartbeat allocates no heap (the
+	// CLAUDE.md rule: the periodic heartbeat must stay zero heap allocation). io.* keys
+	// (once active, always the same 3) use FindOrAdd so only the first heartbeat
+	// allocates their keys; later heartbeats just overwrite the doubles. mem.* keys can
+	// appear/disappear between heartbeats (LLM tag crossing 0, RHI availability), so
+	// they are diffed against PrevMemHeartbeatMask: a key still present is overwritten
+	// in place (no alloc); only a genuine key-set TRANSITION Removes a stale key or Adds
+	// a new one (allocation on that rare transition is the accepted trade-off). Game-
+	// thread only (Tick). Empty and untouched while no source is active, so the default
+	// heartbeat keeps its zero-allocation Track() path.
+	TMap<FString, double> HeartbeatMetrics;
+	// mem.* key set (Framedash::kMemBit* bits) attached to HeartbeatMetrics on the last
+	// heartbeat, used to diff and Remove keys that vanished. Reset in InitializeInternal.
+	uint32 PrevMemHeartbeatMask = 0;
 
 	// This subsystem's own baseline snapshot of the process-global cumulative IO
 	// counters (Framedash::GlobalIoStats). The heartbeat computes its window as
@@ -337,6 +354,32 @@ private:
 	// even though the process-global accumulator may have been fed by an earlier
 	// session. Not the accumulator's business (it is process-wide), so tracked here.
 	bool bIoManualFeedAccepted = false;
+
+	// Session-scoped latch of the bTrackMemoryDetail setting, cached at init. Like
+	// the io.* gates this is SESSION state, not process-global: a later telemetry
+	// session in the same process (UE Editor/PIE) with the setting off emits NO
+	// mem.* keys.
+	bool bTrackMemoryDetail = false;
+
+	// Cached mem.* sample from the last RefreshMemorySample(), refreshed at the
+	// heartbeat cadence in Tick (and taken lazily on the first position-qualified event
+	// before any heartbeat has fired, so the initial ~10s window is not blind). Held as
+	// SCALARS (a presence bitmask + one double per category), NOT a TMap -- so
+	// refreshing it allocates nothing (critical: RefreshMemorySample runs on the
+	// heartbeat, which must stay zero-alloc) and this Public header pulls in no Private
+	// FMemoryMetrics type, same pattern as the io.* baselines above. CachedMemMask holds
+	// Framedash::kMemBit* bits; a value is meaningful only when its bit is set (absent
+	// category => bit clear => key stays absent). Position-qualified events read these
+	// scalars to attach mem.* in canonical order; that per-event attach may allocate
+	// (allowed for a Track carrying metrics), but the heartbeat and refresh do not.
+	uint32 CachedMemMask = 0;
+	double CachedMemVram = 0.0;
+	double CachedMemTextures = 0.0;
+	double CachedMemMeshes = 0.0;
+	double CachedMemAudio = 0.0;
+	// True once a sample has been taken this session (heartbeat or lazy first event);
+	// reset in InitializeInternal so a new session starts blind, not with stale data.
+	bool bMemorySampleValid = false;
 
 	// Camera rotation sampled on the game thread (Tick) and read in
 	// CaptureCameraRotation. The lock guards the pair so it is always read coherently.

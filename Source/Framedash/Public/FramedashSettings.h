@@ -60,6 +60,20 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Capture", meta=(DisplayName="Track Disk IO"))
 	bool bTrackDiskIo;
 
+	/**
+	 * If true, the SDK samples memory-category detail at the heartbeat cadence and
+	 * attaches it as mem.* metrics on perf_heartbeat: mem.vram (RHI texture memory
+	 * in use, works without LLM) and -- only when the Low-Level Memory tracker is
+	 * compiled in AND enabled at runtime (-llm) -- mem.textures / mem.meshes /
+	 * mem.audio. OFF by default: the LLM breakdown needs the engine launched with
+	 * -llm, and even mem.vram is only useful for GPU-memory heatmaps, so it is
+	 * opt-in (fail-safe first). A category whose amount is not tracked stays absent
+	 * (never emitted as 0). Sampling reads cached RHI/LLM counters, so it adds no
+	 * per-frame work.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category="Capture", meta=(DisplayName="Track Memory Detail"))
+	bool bTrackMemoryDetail;
+
 	/** Category path in Project Settings. */
 	virtual FName GetCategoryName() const override { return FName(TEXT("Plugins")); }
 };

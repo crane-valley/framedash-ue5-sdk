@@ -6,6 +6,29 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-15
+
+### Changed
+
+- Fab technical-review resubmission. Epic Fab rejected the 0.1.6 package for
+  three descriptor/licensing issues, now fixed. The release format is now one
+  zip per engine version (5.3-5.8), built by `scripts/package-ue5-plugin.ps1`
+  and, on a `sdk-ue5-v*` tag, by the new `ue5-release.yml` CI workflow:
+  - Per-package descriptor pinning. `-TargetEngineVersion` (5.3-5.8) stamps
+    `"EngineVersion": "<ver>.0"` and each module's `PlatformAllowList` (Framedash
+    runtime: Win64 + Android; FramedashEditor: Win64) into the PACKAGED
+    descriptor only -- the tracked source `Framedash.uplugin` stays unpinned and
+    unrestricted so the public source mirror still builds on every platform
+    `Framedash.Build.cs` supports (Win64/Mac/iOS/Android/Unix).
+  - Two distribution flavors via `-Channel`: `github` ships compiled Win64
+    Binaries (no rebuild prompt for Launcher users); `fab` is source-only
+    (Binaries stripped, per Epic's Fab upload checklist).
+  - Copyright headers added to every shipped code file: a Crane Valley banner on
+    the generated nanopb `telemetry.pb.c/.h` (emitted by the generator so
+    regenerated output stays byte-fresh), and a Crane Valley + upstream nanopb
+    (Petteri Aimonen, zlib) attribution block on the vendored nanopb runtime
+    (`pb*.c/.h`). Replaced a stray Epic Games template header in `Framedash.h`.
+
 ## [0.1.6] - 2026-07-12
 
 ### Added

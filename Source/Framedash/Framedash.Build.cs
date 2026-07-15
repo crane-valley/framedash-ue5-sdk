@@ -1,6 +1,7 @@
 // Copyright Crane Valley. All Rights Reserved.
 
 using UnrealBuildTool;
+using System;
 using System.IO;
 
 public class Framedash : ModuleRules
@@ -76,5 +77,18 @@ public class Framedash : ModuleRules
 
 		// nanopb C files need special handling
 		PublicDefinitions.Add("PB_FIELD_32BIT=1");
+
+		// Opt-in gate for the in-engine Automation Specs (Private/Tests/*Spec.cpp). Even
+		// under WITH_DEV_AUTOMATION_TESTS, BuildPlugin emits Development/Editor DLLs, so
+		// without this gate the specs -- whose setup destructively clears the project's
+		// offline queue -- would ship inside the redistributable binaries. Defined to 1
+		// ONLY when FRAMEDASH_BUILD_AUTOMATION_SPECS=1 is set in the environment (the
+		// automation-spec CI job and the README local-run steps set it), so BuildPlugin
+		// and normal game builds never compile the specs. Trade-off: the BuildPlugin
+		// matrix no longer compile-checks the spec -- acceptable, the automation-spec job
+		// builds and runs it every run.
+		bool bBuildAutomationSpecs =
+			Environment.GetEnvironmentVariable("FRAMEDASH_BUILD_AUTOMATION_SPECS") == "1";
+		PrivateDefinitions.Add("FRAMEDASH_WITH_AUTOMATION_SPECS=" + (bBuildAutomationSpecs ? "1" : "0"));
 	}
 }

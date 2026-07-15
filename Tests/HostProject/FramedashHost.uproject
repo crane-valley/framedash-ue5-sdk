@@ -1,0 +1,12 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "",
+	"Category": "",
+	"Description": "Minimal host project for running the Framedash UE5 SDK Automation Specs headless. The plugin is copied in under Plugins/Framedash at assembly time (see .github/workflows/ue5-ci.yml); EngineAssociation is left empty so any engine can open it.",
+	"Plugins": [
+		{
+			"Name": "Framedash",
+			"Enabled": true
+		}
+	]
+}

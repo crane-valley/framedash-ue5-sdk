@@ -1,3 +1,6 @@
+/* Copyright 2026 Crane Valley. Distributed as part of Framedash. */
+/* nanopb - Copyright (c) 2011 Petteri Aimonen <jpa at nanopb.mail.kapsi.fi> */
+/* zlib license - see LICENSE.txt in this directory. */
 /* pb_common.h: Common support functions for pb_encode.c and pb_decode.c.
  * These functions are rarely needed by applications directly.
  */

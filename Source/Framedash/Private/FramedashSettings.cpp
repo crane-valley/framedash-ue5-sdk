@@ -9,5 +9,6 @@ UFramedashSettings::UFramedashSettings()
 	, bEnableOfflineQueue(true)
 	, bCaptureCameraRotation(true)
 	, bTrackDiskIo(false)
+	, bTrackMemoryDetail(false)
 {
 }

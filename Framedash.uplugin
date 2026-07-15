@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 7,
-	"VersionName": "0.1.6",
+	"Version": 8,
+	"VersionName": "0.1.7",
 	"FriendlyName": "Framedash",
 	"Description": "Game Telemetry SDK",
 	"Category": "Other",
@@ -18,6 +18,11 @@
 		{
 			"Name": "Framedash",
 			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "FramedashEditor",
+			"Type": "Editor",
 			"LoadingPhase": "Default"
 		}
 	]

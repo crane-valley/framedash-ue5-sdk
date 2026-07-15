@@ -1,3 +1,6 @@
+/* Copyright 2026 Crane Valley. Distributed as part of Framedash. */
+/* nanopb - Copyright (c) 2011 Petteri Aimonen <jpa at nanopb.mail.kapsi.fi> */
+/* zlib license - see LICENSE.txt in this directory. */
 /* pb_decode.h: Functions to decode protocol buffers. Depends on pb_decode.c.
  * The main function is pb_decode. You also need an input stream, and the
  * field descriptions created by nanopb_generator.py.

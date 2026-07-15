@@ -68,15 +68,47 @@ This harness runs on every UE5 SDK change in `.github/workflows/ue5-ci.yml`
 (the `googletest` job) on the self-hosted Windows runner, using the
 VS-bundled CMake resolved via `vswhere` and the `Visual Studio 18 2026`
 generator (Release config). The same workflow also runs a RunUAT
-`BuildPlugin` matrix that compiles the full plugin against installed engines.
+`BuildPlugin` matrix that compiles the full plugin against installed engines,
+and an `automation-spec` job that runs the in-engine Automation Specs (below)
+headless on UE 5.6.
+
+## In-engine Automation Specs
+
+Runtime behavior that needs a live engine (`FString`/`TArray`, the HTTP module,
+the file-backed offline queue) is covered by UE Automation Specs under
+`Source/Framedash/Private/Tests/`. They are gated behind BOTH
+`WITH_DEV_AUTOMATION_TESTS` and `FRAMEDASH_WITH_AUTOMATION_SPECS`, and the latter is
+defined only when `Framedash.Build.cs` sees the environment variable
+`FRAMEDASH_BUILD_AUTOMATION_SPECS=1`. This keeps the specs out of every normal build
+(including the RunUAT `BuildPlugin` redistributable, whose Development DLLs would
+otherwise carry them): their setup destructively clears the project's
+`Saved/Framedash` offline queue, so they must never compile into a shipped binary.
+
+- `FramedashShutdownSpec` -- the `UFramedashSubsystem` shutdown/durability
+  contract: events still buffered at teardown are persisted; an in-flight batch
+  that was flushed but never delivered is persisted; a teardown with the offline
+  queue disabled drops events without crashing (fail-safe); a fresh subsystem
+  restores persisted events on initialize.
+
+The `automation-spec` CI job assembles a throwaway host project, copies the plugin
+in, builds the host editor modules with UBT (the editor does not auto-compile a
+code plugin under `-unattended`), then runs
+`UnrealEditor-Cmd FramedashHost.uproject -ExecCmds="Automation RunTests Framedash; Quit"
+-unattended -nullrhi -nosplash -ReportExportPath=<dir>` and fails the step by
+parsing the exported `index.json` (the editor exit code is not a reliable pass/fail
+signal). To run locally, assemble the same host under a short path (e.g.
+`C:\uet\fd-spec-host` -- UE hits MAX_PATH on deep Intermediate trees) with the
+committed `Tests/HostProject/FramedashHost.uproject`, set
+`FRAMEDASH_BUILD_AUTOMATION_SPECS=1` before the UBT build (so the specs compile in),
+then build the host editor modules and run `UnrealEditor-Cmd` as above.
 
 ## What this does NOT cover
 
 - The full UE5 plugin compile (covered by the RunUAT `BuildPlugin` matrix in
   `.github/workflows/ue5-ci.yml`, not by this harness)
 - Runtime behavior of anything that needs `FString`, `TArray`, HTTP module,
-  etc. -- those classes still rely on UnrealEditor automation tests (an
-  Automation Spec job, not yet added -- see PLANS.md Phase 1.5)
+  etc. -- those classes are covered by the in-engine Automation Specs (see the
+  "In-engine Automation Specs" section above), not by this harness.
 
 The contract is: anything in `Source/Framedash/Private/Framedash*Policy.{h,cpp}`,
 `FramedashProtobufSerializer.{h,cpp}`, and `FramedashUuid.{h,cpp}` must stay

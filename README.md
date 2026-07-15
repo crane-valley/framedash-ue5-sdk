@@ -4,7 +4,7 @@ Unreal Engine 5 plugin for collecting game telemetry and sending it to the Frame
 
 ## Requirements
 
-- Unreal Engine 5.3 or newer. This is a source plugin that compiles against the Unreal Engine version of your project; the descriptor does not pin `EngineVersion`, so it is not tied to a single engine release. Build-verified on UE 5.3, 5.4, 5.5, and 5.6. Note: the credential-leaking cross-origin redirect detection in the transport requires `IHttpBase::GetEffectiveURL` (UE 5.4+); on UE 5.3 that one defense is compiled out, and the rest of the SDK is unaffected.
+- Unreal Engine 5.3 or newer. This is a source plugin that compiles against the Unreal Engine version of your project. Release zips are published per engine version (`-ue5.3` ... `-ue5.8`) with `EngineVersion` pinned and prebuilt Win64 editor binaries -- install the zip matching your engine. Building from the repository source instead works on any supported 5.x (the source descriptor does not pin `EngineVersion`). Build-verified on UE 5.3, 5.4, 5.5, and 5.6. Note: the credential-leaking cross-origin redirect detection in the transport requires `IHttpBase::GetEffectiveURL` (UE 5.4+); on UE 5.3 that one defense is compiled out, and the rest of the SDK is unaffected.
 
 ## Structure
 
@@ -156,6 +156,32 @@ if (UFramedashSubsystem* Framedash = GetGameInstance()->GetSubsystem<UFramedashS
 ```
 
 A sample with any negative or non-finite component is dropped in full (no accumulation, no io.* activation) -- same contract as the Unity and Godot SDKs -- so a bad sample can neither poison the window nor activate misleading zero windows.
+
+## Memory Detail Metrics
+
+When **Track Memory Detail** is enabled (`bTrackMemoryDetail`, **off by default**), the SDK samples memory-category usage at the heartbeat cadence and attaches it as `mem.*` metrics on each `perf_heartbeat` event:
+
+| Metric key | Meaning | Source |
+|------------|---------|--------|
+| `mem.vram` | Video memory in use, in bytes (streaming + non-streaming texture allocations) | RHI texture memory stats -- always available |
+| `mem.textures` | LLM `Textures` tag bytes | Low-Level Memory tracker -- only with `-llm` |
+| `mem.meshes` | LLM `Meshes` tag bytes | Low-Level Memory tracker -- only with `-llm` |
+| `mem.audio` | LLM `Audio` tag bytes | Low-Level Memory tracker -- only with `-llm` |
+
+`mem.vram` is read from the RHI (`RHIGetTextureMemoryStats`) and works on every RHI without any special launch flag; it reports the sum of streaming and non-streaming **texture** allocations (the closest RHI proxy for live VRAM footprint -- not the hardware capacity or the streaming-pool budget). It is omitted on headless / `-nullrhi` builds where no RHI is present.
+
+The `mem.textures` / `mem.meshes` / `mem.audio` breakdown requires the **Low-Level Memory tracker** to be both compiled into the build **and** enabled at runtime (launch the engine with `-llm`). When LLM is unavailable or disabled, only `mem.vram` is emitted. A category whose tag reports no tracked bytes stays **absent** (an absent key means "not collected", distinct from a collected `0`).
+
+These ride in the generic metrics map (no proto/schema change), so query them via the data-export / query REST API (e.g. `metrics['mem.vram']`). They are attached when the session enabled the setting; the attach decision is **session-scoped** (a later session in the same process with the setting off emits no `mem.*`). Sampling reads cached RHI/LLM counters at the 10s heartbeat cadence, so it adds no per-frame work.
+
+**Where the keys attach (spatial heatmap).** `perf_heartbeat` has no world position (empty `map_id`), so the spatial heatmap grid -- which buckets by `map_id` and cell bounds -- never sees the heartbeat's metrics. To make per-cell memory heatmaps work, the SDK attaches the same `mem.*` sample to two places:
+
+- every `perf_heartbeat` (as with `io.*`), for time-series / `metrics[...]` queries; and
+- every **position-qualified** tracked event (any event you send with a non-empty `map_id`), so the grid can aggregate memory per cell.
+
+Position-qualified events carry a **cached** sample (refreshed at the 10s heartbeat cadence, plus one lazy sample taken on the first qualifying event so the initial window is not blind) -- no engine sampling or string building happens per event. Events with an empty `map_id` (other than `perf_heartbeat`) get nothing. If you pass your own `mem.*` key in a `TrackWithData` metrics map, **your value wins** (the SDK-injected key is overridden). Absent categories stay absent on events exactly as on the heartbeat.
+
+Enable it under **Project Settings > Plugins > Framedash > Track Memory Detail**, or set `bTrackMemoryDetail=True` in `Config/DefaultGame.ini`. It is opt-in (default OFF), so default sessions keep the zero-allocation event path untouched. A sampler failure degrades to an absent key and never disrupts the game (fail-safe).
 
 ## Map/Level Load-Time
 
