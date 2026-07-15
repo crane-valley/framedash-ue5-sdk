@@ -1,3 +1,5 @@
+// Copyright 2026 Crane Valley. All Rights Reserved.
+
 #include "FramedashProtobufSerializer.h"
 
 extern "C"

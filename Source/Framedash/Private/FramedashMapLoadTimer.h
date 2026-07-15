@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Engine-independent state machine + math for the map/level load-time helper
 // (UFramedashSubsystem::BeginMapLoad / EndMapLoad / ReportMapLoad). Holds the

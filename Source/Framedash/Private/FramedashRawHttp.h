@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Engine-independent HTTP/1.1 message helpers for the direct-socket
 // IPv4/IPv6 fallback transport (see FramedashDirectSocketSender). Builds the

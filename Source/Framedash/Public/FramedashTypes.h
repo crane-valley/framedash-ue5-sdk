@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 
 #pragma once
 
@@ -100,5 +100,5 @@ namespace FramedashConstants
 }
 
 // String constants outside namespace to avoid UHT parsing issues with inline variables
-#define FRAMEDASH_SDK_VERSION TEXT("0.1.7")
+#define FRAMEDASH_SDK_VERSION TEXT("0.1.8")
 #define FRAMEDASH_SDK_NAME TEXT("ue5")

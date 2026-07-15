@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Engine-independent selection rules for the mem.* memory-detail metrics
 // attached to perf_heartbeat events (metrics map / proto field 13). The RHI /

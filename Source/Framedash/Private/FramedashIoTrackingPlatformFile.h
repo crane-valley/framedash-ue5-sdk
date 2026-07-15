@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // A transparent IPlatformFile chaining wrapper that counts synchronous disk
 // reads into the process-wide Framedash::GlobalIoStats() accumulator, feeding

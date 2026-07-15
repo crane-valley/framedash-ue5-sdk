@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Engine-independent endpoint URL security checks. Deliberately free of
 // Unreal types (FString, etc.) so the host-parsing logic can be unit-tested

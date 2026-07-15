@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 
 using UnrealBuildTool;
 using System;
@@ -26,7 +26,7 @@ public class Framedash : ModuleRules
 		bEnableUndefinedIdentifierWarnings = false;
 #endif
 
-		string ThirdPartyPath = Path.Combine(ModuleDirectory, "Private", "ThirdParty");
+		string ThirdPartyPath = Path.GetFullPath(Path.Combine(ModuleDirectory, "..", "ThirdParty"));
 		string ProtoPath = Path.Combine(ModuleDirectory, "Private", "Proto");
 
 		PublicIncludePaths.AddRange(new string[] { });

@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Direct-socket TLS fallback transport for the prefer-IPv4-with-IPv6-fallback
 // ingest connect (UE5 parity with Unity #1218 / Godot #1216). Used ONLY when

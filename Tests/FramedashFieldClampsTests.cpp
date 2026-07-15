@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Standalone unit tests for the pure numeric clamps in FramedashFieldClamps.h.
 // No UE5 headers required -- the header is pure C++ / <cmath>. These clamps must

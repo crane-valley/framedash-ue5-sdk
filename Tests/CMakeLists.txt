@@ -27,7 +27,7 @@ set(PLUGIN_PRIVATE_DIR
 	${CMAKE_CURRENT_SOURCE_DIR}/../Source/Framedash/Private
 )
 set(PLUGIN_PROTO_DIR ${PLUGIN_PRIVATE_DIR}/Proto)
-set(PLUGIN_NANOPB_DIR ${PLUGIN_PRIVATE_DIR}/ThirdParty/nanopb)
+set(PLUGIN_NANOPB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../Source/ThirdParty/nanopb)
 
 enable_testing()
 include(GoogleTest)

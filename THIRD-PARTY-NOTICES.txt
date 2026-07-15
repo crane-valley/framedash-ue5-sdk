@@ -1,15 +1,14 @@
 THIRD-PARTY NOTICES
 
-The Framedash UE5 SDK is licensed under the MIT License (see LICENSE). It
-bundles the following third-party software, whose license terms are reproduced
-below.
+The Framedash UE5 SDK bundles the following third-party software. Its license
+terms are reproduced below.
 
 ================================================================================
 nanopb
 ================================================================================
 A plain-C implementation of Google Protocol Buffers, used to serialize
 telemetry payloads. Bundled under
-Source/Framedash/Private/ThirdParty/nanopb/.
+Source/ThirdParty/nanopb/.
 
 Homepage: https://github.com/nanopb/nanopb
 License:  zlib

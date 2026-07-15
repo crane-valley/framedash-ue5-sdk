@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Standalone unit tests for the raw HTTP/1.1 helpers the direct-socket
 // fallback transport uses (FramedashRawHttp). Mirrors the Unity SDK

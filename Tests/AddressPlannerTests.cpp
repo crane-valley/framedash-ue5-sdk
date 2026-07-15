@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Standalone unit tests for the prefer-IPv4-with-IPv6-fallback address
 // planner (FramedashAddressPlanner). Mirrors the Unity/Godot

@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Standalone unit tests for Framedash::ExtractUrlHost, IsEndpointSecure, and
 // IsCrossOriginRedirect. Verifies the loopback HTTPS exemption matches the parsed

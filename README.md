@@ -13,7 +13,8 @@ sdks/ue5/                     # Standalone redistributable plugin (drop into Plu
   Framedash.uplugin
   Source/Framedash/
     Public/                   # Public headers
-    Private/                  # Implementation (Proto/, ThirdParty/nanopb/)
+    Private/                  # Implementation (including generated Proto/)
+  Source/ThirdParty/nanopb/   # Vendored nanopb runtime and zlib license
   Resources/
   Tests/                      # Engine-independent unit tests (GoogleTest)
 ```

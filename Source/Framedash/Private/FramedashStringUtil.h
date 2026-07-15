@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Shared FString truncation that counts UTF-16 code units -- the unit the
 // Framedash ingest validator enforces (it measures JavaScript string length

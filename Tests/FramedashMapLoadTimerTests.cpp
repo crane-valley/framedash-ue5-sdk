@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Standalone unit tests for the pure C++ map/level load-time timer in
 // FramedashMapLoadTimer.h. No UE5 headers required -- the header is pure C++ /

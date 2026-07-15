@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Engine-independent client-side field clamps that mirror the ingest server's
 // per-event validation limits (packages/ingest-core/src/config.ts +

@@ -6,6 +6,27 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-07-15
+
+### Fixed
+
+- Fab technical-review resubmission after the 0.1.7 package was rejected:
+  - Every shipped C, C++, header, and Build.cs file now starts with the publisher
+    name and 2026 publication year.
+  - Vendored nanopb moved from the runtime module's private directory to the
+    required plugin-level `Source/ThirdParty/nanopb/` directory; build and test
+    include paths follow the new location.
+  - `Config/FilterPlugin.ini` now includes itself, and the packaging script
+    requires it in BuildPlugin output so a submission cannot silently omit the
+    manifest.
+  - Fab-flavor zips omit Framedash's first-party MIT `LICENSE` while retaining
+    nanopb's zlib license and third-party notice. GitHub/source distribution
+    remains MIT-licensed.
+- The final Fab zip now passes `scripts/test-ue5-fab-package.ps1` before the
+  release script accepts it. The gate checks licensing, copyright headers,
+  third-party placement, filter coverage, descriptor metadata, forbidden build
+  folders, and Fab's 170-character path limit against the actual archive.
+
 ## [0.1.7] - 2026-07-15
 
 ### Changed

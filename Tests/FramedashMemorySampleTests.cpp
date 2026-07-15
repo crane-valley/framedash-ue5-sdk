@@ -1,4 +1,4 @@
-// Copyright Crane Valley. All Rights Reserved.
+// Copyright 2026 Crane Valley. All Rights Reserved.
 //
 // Engine-independent coverage for the mem.* key-selection rules
 // (SelectMemoryMetrics). The RHI/LLM reads themselves are engine-coupled and not
