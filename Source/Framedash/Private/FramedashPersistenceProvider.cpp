@@ -112,12 +112,20 @@ void ReadStringMap(const TSharedPtr<FJsonObject>& Object, const TCHAR* FieldName
 		return;
 	}
 
-	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : (*MapObject)->Values)
+	// UE 5.8 changed FJsonObject::Values keys to UE::TSharedString, so a
+	// const-ref TPair<FString,...> binds to a temporary there, while on <=5.7
+	// (FString keys) a by-value TPair is a needless copy; Android clang
+	// -Werror (-Wrange-loop-construct) rejects BOTH spellings depending on
+	// engine version (Epic Fab bounced the 5.8.0 build; our 5.6 CI bounced
+	// the by-value form). const auto& is the only form clean on 5.3-5.8, and
+	// FString(Pair.Key) is the engine's own key-conversion idiom (see
+	// JsonSerializerReader.cpp) -- do NOT rewrite to an explicit TPair type.
+	for (const auto& Pair : (*MapObject)->Values)
 	{
 		FString Value;
 		if (Pair.Value.IsValid() && Pair.Value->TryGetString(Value))
 		{
-			OutMap.Add(Pair.Key, Value);
+			OutMap.Add(FString(Pair.Key), Value);
 		}
 	}
 }
@@ -130,12 +138,12 @@ void ReadDoubleMap(const TSharedPtr<FJsonObject>& Object, const TCHAR* FieldName
 		return;
 	}
 
-	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : (*MapObject)->Values)
+	for (const auto& Pair : (*MapObject)->Values)
 	{
 		double Value = 0.0;
 		if (Pair.Value.IsValid() && Pair.Value->TryGetNumber(Value))
 		{
-			OutMap.Add(Pair.Key, Value);
+			OutMap.Add(FString(Pair.Key), Value);
 		}
 	}
 }

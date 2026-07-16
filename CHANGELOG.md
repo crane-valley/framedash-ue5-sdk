@@ -6,6 +6,17 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-07-17
+
+### Fixed
+
+- UE 5.8 Android clang range-loop-construct errors in the offline-queue
+  persistence JSON load path. UE 5.8 changed `FJsonObject::Values` keys to
+  `UE::TSharedString`, so a const-ref `TPair<FString, ...>` range variable bound
+  to a temporary; clang `-Werror` on Android rejected it. Iterating by value
+  compiles identically on UE 5.3-5.8. Reported by Epic Fab technical review
+  against Engine 5.8.0.
+
 ## [0.1.8] - 2026-07-15
 
 ### Fixed

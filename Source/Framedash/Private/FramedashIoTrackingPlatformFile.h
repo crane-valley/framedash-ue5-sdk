@@ -147,7 +147,13 @@ public:
 
 	// Memory-mapped read: delegate only (the base default returns nullptr).
 	// Unmetered.
-#if UE_VERSION_OLDER_THAN(5, 8, 0)
+	// Deprecated-base override compiled only pre-5.6: on 5.6+ the engine has no
+	// live IPlatformFile::OpenMapped(const TCHAR*) call sites (verified against
+	// engine source) and IPlatformFile's own default OpenMapped body just
+	// forwards to OpenMappedEx, so OpenMappedEx (overridden below) already
+	// covers interception on 5.6+ without pulling in the UE_DEPRECATED(5.6, ...)
+	// base method and its C4996 warning.
+#if UE_VERSION_OLDER_THAN(5, 6, 0)
 	virtual IMappedFileHandle* OpenMapped(const TCHAR* Filename) override { return LowerLevel->OpenMapped(Filename); }
 #endif
 #if !UE_VERSION_OLDER_THAN(5, 6, 0)
