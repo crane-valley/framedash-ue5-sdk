@@ -119,7 +119,7 @@ bool ParseMapsResponse(const FString& Json, TArray<FMapInfo>& OutMaps, FString& 
 	}
 
 	OutMaps.Reserve(Data->Num());
-	for (const TSharedPtr<FJsonValue>& Value : *Data)
+	for (const auto& Value : *Data)
 	{
 		const TSharedPtr<FJsonObject>* ObjectPtr = nullptr;
 		if (!Value.IsValid() || !Value->TryGetObject(ObjectPtr) || ObjectPtr == nullptr)
@@ -167,7 +167,7 @@ bool ParseHeatmapResponse(const FString& Json, TArray<FHeatmapCell>& OutCells, F
 	}
 
 	OutCells.Reserve(Data->Num());
-	for (const TSharedPtr<FJsonValue>& Value : *Data)
+	for (const auto& Value : *Data)
 	{
 		const TSharedPtr<FJsonObject>* ObjectPtr = nullptr;
 		if (!Value.IsValid() || !Value->TryGetObject(ObjectPtr) || ObjectPtr == nullptr)
@@ -180,6 +180,7 @@ bool ParseHeatmapResponse(const FString& Json, TArray<FHeatmapCell>& OutCells, F
 		FHeatmapCell Cell;
 		if (!ReadNumber(Object, TEXT("x"), Cell.X) ||
 			!ReadNumber(Object, TEXT("y"), Cell.Y) ||
+			!ReadOptionalNumber(Object, TEXT("z"), Cell.Z) ||
 			!ReadNumberOrNumericString(Object, TEXT("weight"), Cell.Weight) ||
 			!ReadNumberOrNumericString(Object, TEXT("event_count"), Cell.EventCount) ||
 			!ReadNumber(Object, TEXT("avg_fps"), Cell.AverageFps) ||
@@ -217,7 +218,11 @@ FString ParseProblemMessage(const FString& Json, const FString& Fallback)
 	return Fallback;
 }
 
-FCellRect BuildCellRect(const FHeatmapCell& Cell, const FMapInfo& Map, double CellSize)
+FCellRect BuildCellRect(
+	const FHeatmapCell& Cell,
+	const FMapInfo& Map,
+	double CellSize,
+	const FVector2D& WorldOffset)
 {
 	FCellRect Rect;
 	if (CellSize <= 0.0 || !FMath::IsFinite(CellSize))
@@ -227,17 +232,19 @@ FCellRect BuildCellRect(const FHeatmapCell& Cell, const FMapInfo& Map, double Ce
 
 	const double BinX = FMath::FloorToDouble((Cell.X - Map.WorldMinX) / CellSize);
 	const double BinY = FMath::FloorToDouble((Cell.Y - Map.WorldMinY) / CellSize);
-	Rect.MinX = Map.WorldMinX + BinX * CellSize;
-	Rect.MinY = Map.WorldMinY + BinY * CellSize;
-	Rect.MaxX = FMath::Min(Rect.MinX + CellSize, Map.WorldMaxX);
-	Rect.MaxY = FMath::Min(Rect.MinY + CellSize, Map.WorldMaxY);
+	const double CellMinX = Map.WorldMinX + BinX * CellSize;
+	const double CellMinY = Map.WorldMinY + BinY * CellSize;
+	Rect.MinX = CellMinX + WorldOffset.X;
+	Rect.MinY = CellMinY + WorldOffset.Y;
+	Rect.MaxX = FMath::Min(CellMinX + CellSize, Map.WorldMaxX) + WorldOffset.X;
+	Rect.MaxY = FMath::Min(CellMinY + CellSize, Map.WorldMaxY) + WorldOffset.Y;
 	return Rect;
 }
 
 double FindMaxWeight(const TArray<FHeatmapCell>& Cells)
 {
 	double MaxWeight = 0.0;
-	for (const FHeatmapCell& Cell : Cells)
+	for (const auto& Cell : Cells)
 	{
 		MaxWeight = FMath::Max(MaxWeight, Cell.Weight);
 	}
@@ -253,13 +260,79 @@ double NormalizeWeight(double Weight, double MaxWeight)
 	return FMath::Clamp(Weight / MaxWeight, 0.0, 1.0);
 }
 
+TStaticArray<FVector, 8> BuildVoxelCorners(
+	const FCellRect& Rect,
+	double CenterZ,
+	double CellSize)
+{
+	constexpr double VoxelFillRatio = 0.9;
+	const double CenterX = (Rect.MinX + Rect.MaxX) * 0.5;
+	const double CenterY = (Rect.MinY + Rect.MaxY) * 0.5;
+	const double HalfWidth = (Rect.MaxX - Rect.MinX) * VoxelFillRatio * 0.5;
+	const double HalfDepth = (Rect.MaxY - Rect.MinY) * VoxelFillRatio * 0.5;
+	const double HalfHeight = FMath::IsFinite(CellSize) && CellSize > 0.0
+		? CellSize * VoxelFillRatio * 0.5
+		: 0.0;
+	const double SafeCenterZ = FMath::IsFinite(CenterZ) ? CenterZ : 0.0;
+	const double MinZ = SafeCenterZ - HalfHeight;
+	const double MaxZ = SafeCenterZ + HalfHeight;
+	TStaticArray<FVector, 8> Corners;
+	Corners[0] = FVector(CenterX - HalfWidth, CenterY - HalfDepth, MinZ);
+	Corners[1] = FVector(CenterX + HalfWidth, CenterY - HalfDepth, MinZ);
+	Corners[2] = FVector(CenterX + HalfWidth, CenterY + HalfDepth, MinZ);
+	Corners[3] = FVector(CenterX - HalfWidth, CenterY + HalfDepth, MinZ);
+	Corners[4] = FVector(CenterX - HalfWidth, CenterY - HalfDepth, MaxZ);
+	Corners[5] = FVector(CenterX + HalfWidth, CenterY - HalfDepth, MaxZ);
+	Corners[6] = FVector(CenterX + HalfWidth, CenterY + HalfDepth, MaxZ);
+	Corners[7] = FVector(CenterX - HalfWidth, CenterY + HalfDepth, MaxZ);
+	return Corners;
+}
+
+TStaticArray<FVector, 8> BuildHeatmapCellCorners(
+	const FCellRect& Rect,
+	const FHeatmapCell& Cell,
+	double BaseZ,
+	double CellSize)
+{
+	const double VoxelHeight = IsVolumetricHeatmapCell(Cell, CellSize) ? CellSize : 0.0;
+	return BuildVoxelCorners(Rect, Cell.Z.Get(BaseZ), VoxelHeight);
+}
+
+bool IsVolumetricHeatmapCell(const FHeatmapCell& Cell, double CellSize)
+{
+	return Cell.Z.IsSet() && FMath::IsFinite(CellSize) && CellSize > 0.0;
+}
+
+FBox BuildHeatmapFramingBounds(const FBox& CellBounds, double ZOffset)
+{
+	if (!CellBounds.IsValid)
+	{
+		return CellBounds;
+	}
+
+	const FBox DisplayBounds = CellBounds.ShiftBy(FVector(0.0, 0.0, ZOffset));
+	const FVector Extent = DisplayBounds.GetExtent();
+	const double Padding = FMath::Max(25.0, FMath::Max(Extent.X, Extent.Y) * 0.05);
+	return DisplayBounds.ExpandBy(FVector(Padding, Padding, Padding));
+}
+
 FLinearColor HeatmapColor(double NormalizedWeight, float Opacity)
 {
 	const float Alpha = FMath::Clamp(Opacity, 0.0f, 1.0f);
+	const float Weight = static_cast<float>(FMath::Clamp(NormalizedWeight, 0.0, 1.0));
+	static const FLinearColor Stops[] = {
+		FLinearColor(0.0f, 0.1f, 1.0f),
+		FLinearColor(0.0f, 1.0f, 1.0f),
+		FLinearColor(0.0f, 1.0f, 0.2f),
+		FLinearColor(1.0f, 1.0f, 0.0f),
+		FLinearColor(1.0f, 0.05f, 0.0f),
+	};
+	const float ScaledWeight = Weight * 4.0f;
+	const int32 StopIndex = FMath::Min(FMath::FloorToInt(ScaledWeight), 3);
 	FLinearColor Color = FMath::Lerp(
-		FLinearColor(0.0f, 0.0f, 1.0f, Alpha),
-		FLinearColor(1.0f, 0.0f, 0.0f, Alpha),
-		static_cast<float>(FMath::Clamp(NormalizedWeight, 0.0, 1.0)));
+		Stops[StopIndex],
+		Stops[StopIndex + 1],
+		ScaledWeight - static_cast<float>(StopIndex));
 	Color.A = Alpha;
 	return Color;
 }

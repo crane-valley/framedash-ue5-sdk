@@ -10,6 +10,7 @@
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SNumericEntryBox.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SGridPanel.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -19,6 +20,7 @@
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UnrealType.h"
 #include "Editor.h"
+#include "LevelEditorViewport.h"
 
 #define LOCTEXT_NAMESPACE "FramedashEditorHeatmapPanel"
 
@@ -26,7 +28,7 @@ namespace
 {
 	TSharedPtr<int32> FindIntegerOption(const TArray<TSharedPtr<int32>>& Options, int32 Value)
 	{
-		for (const TSharedPtr<int32>& Option : Options)
+		for (const auto& Option : Options)
 		{
 			if (Option.IsValid() && *Option == Value)
 			{
@@ -42,11 +44,11 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 	HttpClient = MakeShared<FFramedashEditorHttpClient>();
 	Overlay = MakeShared<FFramedashEditorHeatmapOverlay>();
 
-	for (const int32 Value : {1, 7, 14, 30})
+	for (const auto& Value : {1, 7, 14, 30})
 	{
 		DaysOptions.Add(MakeShared<int32>(Value));
 	}
-	for (const int32 Value : {5, 10, 25, 50})
+	for (const auto& Value : {5, 10, 25, 50})
 	{
 		CellSizeOptions.Add(MakeShared<int32>(Value));
 	}
@@ -83,7 +85,7 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 			.Padding(12.0f, 0.0f, 12.0f, 10.0f)
 			[
 				SNew(STextBlock)
-				.Text(LOCTEXT("SettingsHint", "Configure the API URL, project ID, read key, opacity, and Z offset under Project Settings > Plugins > Framedash Heatmap."))
+				.Text(LOCTEXT("SettingsHint", "Configure the API URL, project ID, read key, opacity, alignment, and Z offset under Project Settings > Plugins > Framedash Heatmap."))
 				.AutoWrapText(true)
 				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 			]
@@ -180,6 +182,63 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 					.OnTextChanged(this, &SFramedashEditorHeatmapPanel::OnEventNameChanged)
 					.OnTextCommitted(this, &SFramedashEditorHeatmapPanel::OnEventNameCommitted)
 				]
+				+ SGridPanel::Slot(0, 4)
+				.Padding(0.0f, 4.0f, 12.0f, 4.0f)
+				.VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("WorldAlignmentLabel", "World Alignment"))
+					.ToolTipText(LOCTEXT(
+						"WorldAlignmentTooltip",
+						"Translate cloud coordinates into this editor world's origin without changing telemetry data."))
+				]
+				+ SGridPanel::Slot(1, 4)
+				.ColumnSpan(2)
+				.Padding(0.0f, 4.0f)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(0.0f, 0.0f, 4.0f, 0.0f)
+					[
+						SNew(STextBlock).Text(LOCTEXT("WorldAlignmentXLabel", "X"))
+					]
+					+ SHorizontalBox::Slot()
+					.FillWidth(1.0f)
+					.Padding(0.0f, 0.0f, 12.0f, 0.0f)
+					[
+						SAssignNew(WorldOffsetXEntry, SNumericEntryBox<double>)
+						.AllowSpin(true)
+						.MinSliderValue(-100000.0)
+						.MaxSliderValue(100000.0)
+						.Delta(10.0)
+						.Value(this, &SFramedashEditorHeatmapPanel::GetWorldOffsetX)
+						.OnValueChanged(this, &SFramedashEditorHeatmapPanel::OnWorldOffsetXChanged)
+						.OnValueCommitted(this, &SFramedashEditorHeatmapPanel::OnWorldOffsetXCommitted)
+						.OnEndSliderMovement(this, &SFramedashEditorHeatmapPanel::OnWorldOffsetXSliderEnded)
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(0.0f, 0.0f, 4.0f, 0.0f)
+					[
+						SNew(STextBlock).Text(LOCTEXT("WorldAlignmentYLabel", "Y"))
+					]
+					+ SHorizontalBox::Slot()
+					.FillWidth(1.0f)
+					[
+						SAssignNew(WorldOffsetYEntry, SNumericEntryBox<double>)
+						.AllowSpin(true)
+						.MinSliderValue(-100000.0)
+						.MaxSliderValue(100000.0)
+						.Delta(10.0)
+						.Value(this, &SFramedashEditorHeatmapPanel::GetWorldOffsetY)
+						.OnValueChanged(this, &SFramedashEditorHeatmapPanel::OnWorldOffsetYChanged)
+						.OnValueCommitted(this, &SFramedashEditorHeatmapPanel::OnWorldOffsetYCommitted)
+						.OnEndSliderMovement(this, &SFramedashEditorHeatmapPanel::OnWorldOffsetYSliderEnded)
+					]
+				]
 			]
 			+ SVerticalBox::Slot()
 			.AutoHeight()
@@ -194,6 +253,15 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 					.Text(this, &SFramedashEditorHeatmapPanel::GetFetchButtonText)
 					.IsEnabled(this, &SFramedashEditorHeatmapPanel::CanFetchHeatmap)
 					.OnClicked(this, &SFramedashEditorHeatmapPanel::FetchHeatmap)
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.Padding(0.0f, 0.0f, 12.0f, 0.0f)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("FrameHeatmap", "Frame Heatmap"))
+					.IsEnabled(this, &SFramedashEditorHeatmapPanel::CanFrameHeatmap)
+					.OnClicked(this, &SFramedashEditorHeatmapPanel::FrameHeatmap)
 				]
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
@@ -354,6 +422,33 @@ bool SFramedashEditorHeatmapPanel::CanFetchHeatmap() const
 	return !bBusy && SelectedMap.IsValid();
 }
 
+FReply SFramedashEditorHeatmapPanel::FrameHeatmap()
+{
+	FBox Bounds;
+	if (!Overlay.IsValid() || !Overlay->GetWorldBounds(Bounds) ||
+		GCurrentLevelEditingViewportClient == nullptr)
+	{
+		StatusText = LOCTEXT(
+			"FrameHeatmapUnavailable",
+			"Fetch heatmap data before framing the viewport.");
+		return FReply::Handled();
+	}
+
+	GCurrentLevelEditingViewportClient->SetViewportType(LVT_Perspective);
+	GCurrentLevelEditingViewportClient->SetViewRotation(FRotator(-55.0, -45.0, 0.0));
+	GCurrentLevelEditingViewportClient->FocusViewportOnBox(Bounds, true);
+	GCurrentLevelEditingViewportClient->Invalidate();
+	return FReply::Handled();
+}
+
+bool SFramedashEditorHeatmapPanel::CanFrameHeatmap() const
+{
+	FBox Bounds;
+	return Overlay.IsValid() && Overlay->GetWorldBounds(Bounds) &&
+		GCurrentLevelEditingViewportClient != nullptr &&
+		(GEditor == nullptr || GEditor->PlayWorld == nullptr);
+}
+
 bool SFramedashEditorHeatmapPanel::CanStartRequest() const
 {
 	return !bBusy;
@@ -389,6 +484,18 @@ FText SFramedashEditorHeatmapPanel::GetSelectedCellSizeText() const
 FText SFramedashEditorHeatmapPanel::GetEventNameFilterText() const
 {
 	return FText::FromString(EventNameFilter);
+}
+
+TOptional<double> SFramedashEditorHeatmapPanel::GetWorldOffsetX() const
+{
+	const UFramedashEditorSettings* Settings = GetDefault<UFramedashEditorSettings>();
+	return Settings != nullptr ? TOptional<double>(Settings->WorldOffsetX) : TOptional<double>();
+}
+
+TOptional<double> SFramedashEditorHeatmapPanel::GetWorldOffsetY() const
+{
+	const UFramedashEditorSettings* Settings = GetDefault<UFramedashEditorSettings>();
+	return Settings != nullptr ? TOptional<double>(Settings->WorldOffsetY) : TOptional<double>();
 }
 
 FText SFramedashEditorHeatmapPanel::GetFetchButtonText() const
@@ -506,6 +613,56 @@ void SFramedashEditorHeatmapPanel::OnEventNameCommitted(const FText& Text, EText
 	}
 }
 
+void SFramedashEditorHeatmapPanel::OnWorldOffsetXChanged(double Value)
+{
+	if (UFramedashEditorSettings* Settings = GetMutableDefault<UFramedashEditorSettings>())
+	{
+		Settings->WorldOffsetX = Value;
+	}
+}
+
+void SFramedashEditorHeatmapPanel::OnWorldOffsetYChanged(double Value)
+{
+	if (UFramedashEditorSettings* Settings = GetMutableDefault<UFramedashEditorSettings>())
+	{
+		Settings->WorldOffsetY = Value;
+	}
+}
+
+void SFramedashEditorHeatmapPanel::OnWorldOffsetXCommitted(double Value, ETextCommit::Type)
+{
+	OnWorldOffsetXChanged(Value);
+	ApplyWorldOffsetAndSave();
+}
+
+void SFramedashEditorHeatmapPanel::OnWorldOffsetYCommitted(double Value, ETextCommit::Type)
+{
+	OnWorldOffsetYChanged(Value);
+	ApplyWorldOffsetAndSave();
+}
+
+void SFramedashEditorHeatmapPanel::OnWorldOffsetXSliderEnded(double Value)
+{
+	OnWorldOffsetXChanged(Value);
+	ApplyWorldOffsetAndSave();
+}
+
+void SFramedashEditorHeatmapPanel::OnWorldOffsetYSliderEnded(double Value)
+{
+	OnWorldOffsetYChanged(Value);
+	ApplyWorldOffsetAndSave();
+}
+
+void SFramedashEditorHeatmapPanel::ApplyWorldOffsetAndSave()
+{
+	const UFramedashEditorSettings* Settings = GetDefault<UFramedashEditorSettings>();
+	if (Settings != nullptr && Overlay.IsValid())
+	{
+		Overlay->SetWorldOffset(FVector2D(Settings->WorldOffsetX, Settings->WorldOffsetY));
+	}
+	SaveSettings();
+}
+
 void SFramedashEditorHeatmapPanel::OnSettingsObjectPropertyChanged(
 	UObject* Object,
 	FPropertyChangedEvent& PropertyChangedEvent)
@@ -538,7 +695,16 @@ void SFramedashEditorHeatmapPanel::OnSettingsObjectPropertyChanged(
 		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, OverlayOpacity);
 	const bool bZOffsetProperty = bCheckAllQueryProperties ||
 		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, ZOffset);
-	if ((bOverlayOpacityProperty || bZOffsetProperty) && GEditor != nullptr)
+	const bool bWorldOffsetXProperty = bCheckAllQueryProperties ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, WorldOffsetX);
+	const bool bWorldOffsetYProperty = bCheckAllQueryProperties ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, WorldOffsetY);
+	if ((bWorldOffsetXProperty || bWorldOffsetYProperty) && Overlay.IsValid())
+	{
+		Overlay->SetWorldOffset(FVector2D(Settings->WorldOffsetX, Settings->WorldOffsetY));
+	}
+	if ((bOverlayOpacityProperty || bZOffsetProperty ||
+		bWorldOffsetXProperty || bWorldOffsetYProperty) && GEditor != nullptr)
 	{
 		GEditor->RedrawLevelEditingViewports(false);
 	}
@@ -662,7 +828,7 @@ void SFramedashEditorHeatmapPanel::HandleMapsResponse(
 	}
 
 	MapOptions.Reserve(Maps.Num());
-	for (FramedashEditor::FMapInfo& Map : Maps)
+	for (auto&& Map : Maps)
 	{
 		MapOptions.Add(MakeShared<FramedashEditor::FMapInfo>(MoveTemp(Map)));
 	}
@@ -711,7 +877,11 @@ void SFramedashEditorHeatmapPanel::HandleHeatmapResponse(
 	const int32 CellCount = Cells.Num();
 	if (Overlay.IsValid())
 	{
-		Overlay->SetData(Map, Cells, CellSize);
+		const UFramedashEditorSettings* Settings = GetDefault<UFramedashEditorSettings>();
+		const FVector2D WorldOffset = Settings != nullptr
+			? FVector2D(Settings->WorldOffsetX, Settings->WorldOffsetY)
+			: FVector2D::ZeroVector;
+		Overlay->SetData(Map, Cells, CellSize, WorldOffset);
 	}
 	if (CellCount == 10000)
 	{

@@ -6,6 +6,17 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-07-20
+
+### Fixed
+
+- Repeated offline restarts no longer duplicate restored queue events. Shutdown
+  now appends only events created during the current run while restored events
+  remain durable until the server acknowledges them.
+- A full in-memory buffer now preserves the restored durable prefix instead of
+  overwriting its oldest entry. This keeps positional disk acknowledgements and
+  shutdown persistence aligned under a pre-flush event burst.
+
 ## [0.1.9] - 2026-07-17
 
 ### Fixed
@@ -13,9 +24,11 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 - UE 5.8 Android clang range-loop-construct errors in the offline-queue
   persistence JSON load path. UE 5.8 changed `FJsonObject::Values` keys to
   `UE::TSharedString`, so a const-ref `TPair<FString, ...>` range variable bound
-  to a temporary; clang `-Werror` on Android rejected it. Iterating by value
-  compiles identically on UE 5.3-5.8. Reported by Epic Fab technical review
-  against Engine 5.8.0.
+  to a temporary; clang `-Werror` on Android rejected it (and a by-value `TPair`
+  trips the opposite needless-copy diagnostic on UE 5.7 and older). The loops
+  now use `const auto&` with an explicit `FString(Pair.Key)` conversion, the
+  engine's own idiom, which compiles cleanly on UE 5.3-5.8. Reported by Epic
+  Fab technical review against Engine 5.8.0.
 
 ## [0.1.8] - 2026-07-15
 

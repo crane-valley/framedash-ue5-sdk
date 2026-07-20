@@ -7,6 +7,8 @@ UFramedashEditorSettings::UFramedashEditorSettings()
 	, Days(7)
 	, CellSize(25)
 	, OverlayOpacity(0.6f)
+	, WorldOffsetX(0.0)
+	, WorldOffsetY(0.0)
 	, ZOffset(0.0f)
 {
 }

@@ -303,6 +303,7 @@ private:
 	double LastTickSeconds = 0.0;
 	int32 EstimatedPayloadBytes = 0;
 	int32 PendingPersistedEventsToAck = 0;
+	int32 RejectedDurablePrefixEventCount = 0;
 	uint64 NextBatchId = 1;
 	bool bInitialized = false;
 	bool bIsFlushing = false;

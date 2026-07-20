@@ -27,6 +27,8 @@
 #include "Engine/World.h"
 #include "FramedashCameraMath.h"
 
+static constexpr int32 DurablePrefixRejectionLogInterval = 100;
+
 UFramedashSubsystem::UFramedashSubsystem()
 {
 }
@@ -196,6 +198,7 @@ void UFramedashSubsystem::InitializeInternal(const FString& ApiKey, const FStrin
 	TimeSinceLastHeartbeat = 0.0f;
 	EstimatedPayloadBytes = 0;
 	bWarnedEmptyPlayerId = false;
+	RejectedDurablePrefixEventCount = 0;
 	// Reset the single-flight flush guard too. The transport is recreated below, so
 	// a prior in-flight flush's OnClosed is dropped by its now-stale AliveFlag and
 	// would never clear this flag; left stuck true it would silently halt every
@@ -278,7 +281,7 @@ void UFramedashSubsystem::InitializeInternal(const FString& ApiKey, const FStrin
 	TArray<FFramedashEvent> RestoredEvents = PersistenceProvider->Load();
 	if (RestoredEvents.Num() > 0)
 	{
-		for (FFramedashEvent& RestoredEvent : RestoredEvents)
+		for (auto&& RestoredEvent : RestoredEvents)
 		{
 			EventBuffer->Enqueue(MoveTemp(RestoredEvent));
 		}
@@ -317,13 +320,28 @@ void UFramedashSubsystem::ShutdownTelemetry()
 		{
 			UE_LOG(LogFramedash, Warning, TEXT("Shutdown: offline queue disabled, dropping %d buffered event(s)."), DroppedCount);
 		}
-		else if (PersistenceProvider.IsValid() && PersistenceProvider->Append(Events))
-		{
-			UE_LOG(LogFramedash, Log, TEXT("Shutdown: persisted %d buffered event(s) for next run."), DroppedCount);
-		}
 		else
 		{
-			UE_LOG(LogFramedash, Warning, TEXT("Shutdown: %d buffered event(s) could not be persisted."), DroppedCount);
+			// Restored events remain at the head of the durable queue until delivery is
+			// acknowledged. Re-appending that prefix would duplicate it on every offline restart.
+			const int32 AlreadyPersistedCount =
+				FMath::Min(PendingPersistedEventsToAck, Events.Num());
+			if (AlreadyPersistedCount > 0)
+			{
+				Events.RemoveAt(0, AlreadyPersistedCount, FRAMEDASH_ALLOW_SHRINKING_NO);
+				UE_LOG(LogFramedash, Verbose,
+					TEXT("Shutdown: %d restored event(s) already durable, not re-appending."),
+					AlreadyPersistedCount);
+			}
+			const int32 FreshEventCount = Events.Num();
+			if (FreshEventCount > 0 && PersistenceProvider.IsValid() && PersistenceProvider->Append(Events))
+			{
+				UE_LOG(LogFramedash, Log, TEXT("Shutdown: persisted %d buffered event(s) for next run."), FreshEventCount);
+			}
+			else if (FreshEventCount > 0)
+			{
+				UE_LOG(LogFramedash, Warning, TEXT("Shutdown: %d buffered event(s) could not be persisted."), FreshEventCount);
+			}
 		}
 	}
 	PersistInFlightBatches();
@@ -571,7 +589,27 @@ void UFramedashSubsystem::TrackWithData(
 		CaptureCameraRotation(Evt);
 	}
 
-	EventBuffer->Enqueue(MoveTemp(Evt));
+	if (PendingPersistedEventsToAck > 0)
+	{
+		// The file queue is acknowledged positionally, so its in-memory prefix must not
+		// be overwritten. Flushing makes room without adding disk I/O to Track().
+		if (!EventBuffer->TryEnqueuePreservingOldest(MoveTemp(Evt)))
+		{
+			++RejectedDurablePrefixEventCount;
+			if (RejectedDurablePrefixEventCount % DurablePrefixRejectionLogInterval == 1)
+			{
+				UE_LOG(LogFramedash, Warning,
+					TEXT("Event buffer full with a durable prefix; %d incoming event(s) rejected so far."),
+					RejectedDurablePrefixEventCount);
+			}
+			Flush();
+			return;
+		}
+	}
+	else
+	{
+		EventBuffer->Enqueue(MoveTemp(Evt));
+	}
 
 	EstimatedPayloadBytes += FlushPolicy->GetBytesPerEventEstimate();
 
@@ -718,7 +756,7 @@ void UFramedashSubsystem::Flush()
 			DeferredEvents.Add(MoveTemp(Events[Index]));
 		}
 		Events.SetNum(PersistedEventsInBuffer);
-		for (FFramedashEvent& DeferredEvent : DeferredEvents)
+		for (auto&& DeferredEvent : DeferredEvents)
 		{
 			EventBuffer->Enqueue(MoveTemp(DeferredEvent));
 		}
@@ -818,9 +856,9 @@ void UFramedashSubsystem::PersistInFlightBatches()
 	TArray<FFramedashEvent> Events;
 	{
 		FScopeLock Lock(&InFlightCriticalSection);
-		for (TPair<uint64, FInFlightBatch>& Batch : InFlightBatches)
+		for (auto&& Batch : InFlightBatches)
 		{
-			for (FFramedashEvent& Event : Batch.Value.Events)
+			for (auto&& Event : Batch.Value.Events)
 			{
 				Events.Add(MoveTemp(Event));
 			}
@@ -907,7 +945,7 @@ void UFramedashSubsystem::WaitForFailurePersistenceTasks()
 			Tasks = MoveTemp(FailurePersistenceTasks);
 		}
 
-		for (TFuture<void>& Task : Tasks)
+		for (auto&& Task : Tasks)
 		{
 			Task.Wait();
 		}

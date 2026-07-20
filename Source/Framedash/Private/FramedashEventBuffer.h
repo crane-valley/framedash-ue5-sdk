@@ -14,9 +14,13 @@ class FFramedashEventBuffer
 public:
 	explicit FFramedashEventBuffer(int32 InCapacity);
 
-	/** Add an event to the buffer. Returns false if event was dropped (buffer full and overwritten). */
+	/** Add an event to the buffer, overwriting the oldest entry when full. */
 	void Enqueue(const FFramedashEvent& Event);
 	void Enqueue(FFramedashEvent&& Event);
+
+	/** Add an event only when doing so will not overwrite the oldest entry. */
+	bool TryEnqueuePreservingOldest(const FFramedashEvent& Event);
+	bool TryEnqueuePreservingOldest(FFramedashEvent&& Event);
 
 	/** Remove and return all buffered events. */
 	TArray<FFramedashEvent> DequeueAll();
@@ -34,4 +38,6 @@ private:
 	int32 Tail = 0; // Next read position
 	int32 CurrentCount = 0;
 	mutable FCriticalSection CriticalSection;
+
+	void AdvanceAfterWriteLocked();
 };

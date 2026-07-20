@@ -115,7 +115,7 @@ void FFramedashEditorHttpClient::FetchHeatmap(
 	}
 
 	FString Url = FString::Printf(
-		TEXT("%s/api/v1/projects/%s/heatmap?mapId=%s&cellSize=%d&days=%d"),
+		TEXT("%s/api/v1/projects/%s/heatmap?mapId=%s&cellSize=%d&days=%d&includeZ=true"),
 		*BaseUrl,
 		*FGenericPlatformHttp::UrlEncode(ProjectId),
 		*FGenericPlatformHttp::UrlEncode(MapId),
@@ -164,7 +164,7 @@ void FFramedashEditorHttpClient::Shutdown()
 		return;
 	}
 	bShuttingDown = true;
-	for (const FHttpRequestPtr& Request : ActiveRequests)
+	for (const auto& Request : ActiveRequests)
 	{
 		if (Request.IsValid())
 		{

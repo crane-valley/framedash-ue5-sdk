@@ -21,6 +21,7 @@ public class FramedashEditor : ModuleRules
 			"InputCore",
 			"Json",
 			"LevelEditor",
+			"Projects",
 			"RenderCore",
 			"Slate",
 			"SlateCore",

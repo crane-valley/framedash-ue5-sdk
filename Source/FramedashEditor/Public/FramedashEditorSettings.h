@@ -42,7 +42,15 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Overlay", meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="1.0"))
 	float OverlayOpacity;
 
-	/** Height added to the selected map's minimum world Z. */
+	/** Editor-only X translation used when telemetry and level origins differ. */
+	UPROPERTY(Config, EditAnywhere, Category="Overlay", meta=(DisplayName="World Alignment X"))
+	double WorldOffsetX;
+
+	/** Editor-only Y translation used when telemetry and level origins differ. */
+	UPROPERTY(Config, EditAnywhere, Category="Overlay", meta=(DisplayName="World Alignment Y"))
+	double WorldOffsetY;
+
+	/** Editor-only vertical translation applied to measured voxel positions. */
 	UPROPERTY(Config, EditAnywhere, Category="Overlay", meta=(DisplayName="Z Offset"))
 	float ZOffset;
 

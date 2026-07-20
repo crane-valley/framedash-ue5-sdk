@@ -4,7 +4,11 @@
 
 #include "FramedashEditorHeatmapPanel.h"
 
+#include "Brushes/SlateImageBrush.h"
 #include "Framework/Docking/TabManager.h"
+#include "Interfaces/IPluginManager.h"
+#include "Styling/SlateStyle.h"
+#include "Styling/SlateStyleRegistry.h"
 #include "ToolMenu.h"
 #include "ToolMenuEntry.h"
 #include "ToolMenus.h"
@@ -18,14 +22,48 @@ DEFINE_LOG_CATEGORY(LogFramedashEditor);
 namespace
 {
 	const FName HeatmapTabName(TEXT("FramedashHeatmap"));
+	const FName EditorStyleName(TEXT("FramedashEditorStyle"));
+	const FName HeatmapIconName(TEXT("FramedashEditor.Heatmap"));
+	TSharedPtr<FSlateStyleSet> EditorStyle;
+
+	void RegisterEditorStyle()
+	{
+		const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("Framedash"));
+		if (!Plugin.IsValid())
+		{
+			return;
+		}
+
+		EditorStyle = MakeShared<FSlateStyleSet>(EditorStyleName);
+		EditorStyle->SetContentRoot(Plugin->GetBaseDir() / TEXT("Resources"));
+		EditorStyle->Set(
+			HeatmapIconName,
+			new FSlateImageBrush(
+				EditorStyle->RootToContentDir(TEXT("Icon128"), TEXT(".png")),
+				FVector2D(16.0f, 16.0f)));
+		FSlateStyleRegistry::RegisterSlateStyle(*EditorStyle);
+	}
+
+	void UnregisterEditorStyle()
+	{
+		if (EditorStyle.IsValid())
+		{
+			FSlateStyleRegistry::UnRegisterSlateStyle(*EditorStyle);
+			EditorStyle.Reset();
+		}
+	}
 }
 
 void FFramedashEditorModule::StartupModule()
 {
+	RegisterEditorStyle();
+	const FSlateIcon HeatmapIcon(EditorStyleName, HeatmapIconName);
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
 		HeatmapTabName,
 		FOnSpawnTab::CreateRaw(this, &FFramedashEditorModule::SpawnHeatmapTab))
 		.SetDisplayName(LOCTEXT("HeatmapTabTitle", "Framedash Heatmap"))
+		.SetIcon(HeatmapIcon)
+		.SetMenuType(ETabSpawnerMenuType::Hidden)
 		.SetTooltipText(LOCTEXT("HeatmapTabTooltip", "Fetch and display cloud-aggregated Framedash heatmaps."));
 
 	UToolMenus::RegisterStartupCallback(
@@ -45,6 +83,7 @@ void FFramedashEditorModule::ShutdownModule()
 	UToolMenus::UnRegisterStartupCallback(this);
 	UToolMenus::UnregisterOwner(this);
 	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(HeatmapTabName);
+	UnregisterEditorStyle();
 	UE_LOG(LogFramedashEditor, Log, TEXT("Framedash editor module unloaded"));
 }
 
@@ -66,11 +105,13 @@ void FFramedashEditorModule::RegisterMenus()
 		return;
 	}
 	FToolMenuSection& Section = WindowMenu->FindOrAddSection(TEXT("Framedash"));
+	Section.Label = LOCTEXT("FramedashSectionLabel", "Framedash");
+	Section.InsertPosition = FToolMenuInsert(TEXT("GetContent"), EToolMenuInsertType::Before);
 	Section.AddMenuEntry(
 		TEXT("OpenFramedashHeatmap"),
 		LOCTEXT("OpenHeatmapLabel", "Framedash Heatmap"),
 		LOCTEXT("OpenHeatmapTooltip", "Open the Framedash cloud heatmap overlay."),
-		FSlateIcon(),
+		FSlateIcon(EditorStyleName, HeatmapIconName),
 		FUIAction(FExecuteAction::CreateRaw(this, &FFramedashEditorModule::OpenHeatmapTab)));
 }
 

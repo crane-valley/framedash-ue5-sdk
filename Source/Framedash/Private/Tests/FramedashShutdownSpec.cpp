@@ -37,7 +37,7 @@ namespace
 	int32 CountEventsByName(const TArray<FFramedashEvent>& Events, const TCHAR* Name)
 	{
 		int32 Total = 0;
-		for (const FFramedashEvent& Event : Events)
+		for (const auto& Event : Events)
 		{
 			if (Event.EventName == Name)
 			{
@@ -160,7 +160,7 @@ void FFramedashShutdownDurabilitySpec::Define()
 			Subsystem->RemoveFromRoot();
 		});
 
-		It("restores persisted events on a fresh Initialize", [this]()
+		It("does not duplicate restored events when shutdown happens before delivery", [this]()
 		{
 			GetMutableDefault<UFramedashSettings>()->bEnableOfflineQueue = true;
 
@@ -181,20 +181,13 @@ void FFramedashShutdownDurabilitySpec::Define()
 			Subsystem->InitializeTelemetry(TEXT("dummy-key"), TEXT("http://127.0.0.1:1"), TEXT("test-build"), TEXT(""));
 			TestTrue(TEXT("init with a seeded queue succeeded"), Subsystem->IsInitialized());
 
-			// Restore has already happened (the three seed events are now in the buffer).
-			// Wipe the on-disk file here so the teardown assertion measures ONLY what the
-			// buffer drain re-persists, independent of whether restored events are also
-			// left durable on disk until acknowledged -- this proves restore ran without
-			// codifying the current restore-then-re-append duplication as the contract.
-			FFilePersistence().Clear();
-
-			// Tear down without flushing: the drain persists the three restored events plus
-			// the auto-tracked session_start. Had restore not run, only session_start would
-			// be drained and restored_event would be absent.
+			// Tear down without flushing. Restored events remain durable in the original
+			// queue file, so only the fresh session_start event should be appended.
 			Subsystem->Deinitialize();
 
 			const TArray<FFramedashEvent> Persisted = FFilePersistence().Load();
-			TestEqual(TEXT("restored events re-persisted"), CountEventsByName(Persisted, TEXT("restored_event")), 3);
+			TestEqual(TEXT("restored events remain single-copy"),
+				CountEventsByName(Persisted, TEXT("restored_event")), 3);
 			TestEqual(TEXT("session_start persisted"), CountEventsByName(Persisted, TEXT("session_start")), 1);
 
 			Subsystem->RemoveFromRoot();

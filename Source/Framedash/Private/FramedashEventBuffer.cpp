@@ -11,26 +11,45 @@ FFramedashEventBuffer::FFramedashEventBuffer(int32 InCapacity)
 void FFramedashEventBuffer::Enqueue(const FFramedashEvent& Event)
 {
 	FScopeLock Lock(&CriticalSection);
-
 	Buffer[Head] = Event;
-	Head = (Head + 1) % Capacity;
-
-	if (CurrentCount == Capacity)
-	{
-		// Buffer full - overwrite oldest, advance tail
-		Tail = (Tail + 1) % Capacity;
-	}
-	else
-	{
-		++CurrentCount;
-	}
+	AdvanceAfterWriteLocked();
 }
 
 void FFramedashEventBuffer::Enqueue(FFramedashEvent&& Event)
 {
 	FScopeLock Lock(&CriticalSection);
+	Buffer[Head] = MoveTemp(Event);
+	AdvanceAfterWriteLocked();
+}
+
+bool FFramedashEventBuffer::TryEnqueuePreservingOldest(const FFramedashEvent& Event)
+{
+	FScopeLock Lock(&CriticalSection);
+	if (CurrentCount == Capacity)
+	{
+		return false;
+	}
+
+	Buffer[Head] = Event;
+	AdvanceAfterWriteLocked();
+	return true;
+}
+
+bool FFramedashEventBuffer::TryEnqueuePreservingOldest(FFramedashEvent&& Event)
+{
+	FScopeLock Lock(&CriticalSection);
+	if (CurrentCount == Capacity)
+	{
+		return false;
+	}
 
 	Buffer[Head] = MoveTemp(Event);
+	AdvanceAfterWriteLocked();
+	return true;
+}
+
+void FFramedashEventBuffer::AdvanceAfterWriteLocked()
+{
 	Head = (Head + 1) % Capacity;
 
 	if (CurrentCount == Capacity)

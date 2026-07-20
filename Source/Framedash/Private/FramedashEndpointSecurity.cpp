@@ -193,7 +193,7 @@ bool IsEndpointSecure(std::string_view Url)
 	// Reject any control character (including an embedded NUL): a real URL never
 	// contains raw control bytes, and a NUL could otherwise truncate a downstream
 	// copy of the URL and open a parser differential with the HTTP client.
-	for (const char Ch : Url)
+	for (const auto& Ch : Url)
 	{
 		const unsigned char Byte = static_cast<unsigned char>(Ch);
 		if (Byte < 0x20 || Byte == 0x7f)
@@ -257,7 +257,7 @@ bool IsCrossOriginRedirect(std::string_view ConfiguredUrl, std::string_view Effe
 	// "https://ingest.example\@evil/..." would parse here as the configured host yet
 	// libcurl connected to evil. Fail CLOSED (treat as cross origin) rather than
 	// risk a missed leak -- a legitimate telemetry URL never contains these.
-	for (const char Ch : EffectiveUrl)
+	for (const auto& Ch : EffectiveUrl)
 	{
 		const unsigned char Byte = static_cast<unsigned char>(Ch);
 		if (Byte < 0x20 || Byte == 0x7f || Ch == '@' || Ch == '\\')

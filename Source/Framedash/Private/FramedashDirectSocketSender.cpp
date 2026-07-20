@@ -330,7 +330,7 @@ TSharedPtr<const Framedash::FAddressPlan, ESPMode::ThreadSafe> AcquirePlan(
 				// orders IPv4 first.
 				std::string ResolvedIPv4;
 				std::string ResolvedIPv6;
-				for (const FAddressInfoResultData& Data : Result.Results)
+				for (const auto& Data : Result.Results)
 				{
 					if (Data.AddressProtocolName == FNetworkProtocolTypes::IPv4 && ResolvedIPv4.empty())
 					{

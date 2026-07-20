@@ -23,7 +23,7 @@ FCriticalSection QueueFileCriticalSection;
 TSharedRef<FJsonObject> MapStringToJsonObject(const TMap<FString, FString>& Map)
 {
 	TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
-	for (const TPair<FString, FString>& Pair : Map)
+	for (const auto& Pair : Map)
 	{
 		Object->SetStringField(Pair.Key, Pair.Value);
 	}
@@ -33,7 +33,7 @@ TSharedRef<FJsonObject> MapStringToJsonObject(const TMap<FString, FString>& Map)
 TSharedRef<FJsonObject> MapDoubleToJsonObject(const TMap<FString, double>& Map)
 {
 	TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
-	for (const TPair<FString, double>& Pair : Map)
+	for (const auto& Pair : Map)
 	{
 		Object->SetNumberField(Pair.Key, Pair.Value);
 	}
@@ -117,9 +117,11 @@ void ReadStringMap(const TSharedPtr<FJsonObject>& Object, const TCHAR* FieldName
 	// (FString keys) a by-value TPair is a needless copy; Android clang
 	// -Werror (-Wrange-loop-construct) rejects BOTH spellings depending on
 	// engine version (Epic Fab bounced the 5.8.0 build; our 5.6 CI bounced
-	// the by-value form). const auto& is the only form clean on 5.3-5.8, and
+	// the by-value form). auto deduction binds directly to the element type on
+	// every engine version, avoiding both the temporary and the copy, and
 	// FString(Pair.Key) is the engine's own key-conversion idiom (see
-	// JsonSerializerReader.cpp) -- do NOT rewrite to an explicit TPair type.
+	// JsonSerializerReader.cpp) -- do NOT rewrite to an explicit TPair type;
+	// scripts/lint-ue5-range-for.ps1 enforces the auto-based form repo-wide.
 	for (const auto& Pair : (*MapObject)->Values)
 	{
 		FString Value;
@@ -138,6 +140,8 @@ void ReadDoubleMap(const TSharedPtr<FJsonObject>& Object, const TCHAR* FieldName
 		return;
 	}
 
+	// See ReadStringMap for the settled auto-based rationale (UE 5.8
+	// UE::TSharedString keys + Android clang -Wrange-loop-construct).
 	for (const auto& Pair : (*MapObject)->Values)
 	{
 		double Value = 0.0;
@@ -329,7 +333,7 @@ bool FFilePersistence::SaveToDisk(const TArray<FFramedashEvent>& Events) const
 
 	TArray<TSharedPtr<FJsonValue>> EventValues;
 	EventValues.Reserve(Events.Num());
-	for (const FFramedashEvent& Event : Events)
+	for (const auto& Event : Events)
 	{
 		EventValues.Add(MakeShared<FJsonValueObject>(EventToJsonObject(Event)));
 	}
@@ -425,7 +429,7 @@ TArray<FFramedashEvent> FFilePersistence::LoadFromDisk() const
 	}
 
 	Events.Reserve(EventValues->Num());
-	for (const TSharedPtr<FJsonValue>& Value : *EventValues)
+	for (const auto& Value : *EventValues)
 	{
 		FFramedashEvent Event;
 		if (Value.IsValid() && TryReadEvent(Value->AsObject(), Event))

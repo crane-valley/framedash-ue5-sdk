@@ -103,7 +103,7 @@ namespace
 		{
 			return false;
 		}
-		for (const char Ch : Host)
+		for (const auto& Ch : Host)
 		{
 			if (!((Ch >= '0' && Ch <= '9') || Ch == '.'))
 			{
@@ -133,7 +133,7 @@ bool ShouldForceAddressFamily(std::string_view EndpointUrl)
 	// Reject control characters plus the '@'/'\' host-parsing differentials
 	// (same rationale as IsEndpointSecure): the fallback must never engage on
 	// a URL whose host this parser and the HTTP client could disagree about.
-	for (const char Ch : EndpointUrl)
+	for (const auto& Ch : EndpointUrl)
 	{
 		const unsigned char Byte = static_cast<unsigned char>(Ch);
 		if (Byte < 0x20 || Byte == 0x7f || Ch == '@' || Ch == '\\')
@@ -287,7 +287,7 @@ int ExtractPortOrDefault(std::string_view EndpointUrl)
 		return -1;
 	}
 	int Port = 0;
-	for (const char Ch : PortDigits)
+	for (const auto& Ch : PortDigits)
 	{
 		if (Ch < '0' || Ch > '9')
 		{

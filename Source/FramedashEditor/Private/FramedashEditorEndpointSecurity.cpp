@@ -47,7 +47,7 @@ namespace
 
 	bool HasUnsafeUrlCharacter(std::string_view Url)
 	{
-		for (const char Character : Url)
+		for (const auto& Character : Url)
 		{
 			const unsigned char Byte = static_cast<unsigned char>(Character);
 			if (Byte < 0x20 || Byte == 0x7f)

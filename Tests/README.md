@@ -88,7 +88,9 @@ otherwise carry them): their setup destructively clears the project's
   contract: events still buffered at teardown are persisted; an in-flight batch
   that was flushed but never delivered is persisted; a teardown with the offline
   queue disabled drops events without crashing (fail-safe); a fresh subsystem
-  restores persisted events on initialize.
+  restores persisted events on initialize without duplicating them on shutdown.
+- `FramedashEventBufferSpec` -- a full ring preserves an unacknowledged durable
+  prefix by rejecting the incoming event instead of overwriting the oldest slot.
 
 The `automation-spec` CI job assembles a throwaway host project, copies the plugin
 in, builds the host editor modules with UBT (the editor does not auto-compile a

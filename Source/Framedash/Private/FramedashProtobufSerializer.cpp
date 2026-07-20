@@ -127,7 +127,7 @@ bool EncodeEventsCb(pb_ostream_t* Stream, const pb_field_t* Field, void* const* 
 	const FEventsEncodeContext* Ctx = static_cast<const FEventsEncodeContext*>(*Arg);
 	if (!Ctx || !Ctx->Events) return true;
 
-	for (const Framedash::FTelemetryEvent& Evt : *Ctx->Events)
+	for (const auto& Evt : *Ctx->Events)
 	{
 		framedash_v1_GameTelemetryEvent PbEvent = framedash_v1_GameTelemetryEvent_init_zero;
 

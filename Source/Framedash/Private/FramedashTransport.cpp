@@ -114,7 +114,7 @@ Framedash::FTelemetryEvent ToSerializerEvent(const FFramedashEvent& Event)
 int64 CountDecodedEntries(const TArray<FFramedashEvent>& Events)
 {
 	int64 Total = Events.Num();
-	for (const FFramedashEvent& Evt : Events)
+	for (const auto& Evt : Events)
 	{
 		Total += Evt.Attributes.Num();
 		Total += Evt.Metrics.Num();
@@ -373,7 +373,7 @@ bool FFramedashTransport::SerializeToProtobuf(const TArray<FFramedashEvent>& Eve
 	std::vector<Framedash::FTelemetryEvent> SerializerEvents;
 	SerializerEvents.reserve(Events.Num());
 
-	for (const FFramedashEvent& Event : Events)
+	for (const auto& Event : Events)
 	{
 		SerializerEvents.emplace_back(ToSerializerEvent(Event));
 	}
@@ -829,7 +829,7 @@ bool FFramedashTransport::ValidateEndpointSecurity() const
 	// hostile: ToUtf8String converts via a NUL-terminated C string, so a NUL would
 	// truncate the validated copy while the HTTP layer may still see the full
 	// FString -- a parser differential. Reject such URLs outright, before convert.
-	for (const TCHAR Ch : EndpointUrl)
+	for (const auto& Ch : EndpointUrl)
 	{
 		if (Ch < TEXT(' ') || Ch == TCHAR(0x7f))
 		{

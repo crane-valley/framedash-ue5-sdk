@@ -29,17 +29,54 @@ FFramedashEditorHeatmapOverlay::~FFramedashEditorHeatmapOverlay()
 void FFramedashEditorHeatmapOverlay::SetData(
 	const FramedashEditor::FMapInfo& Map,
 	const TArray<FramedashEditor::FHeatmapCell>& Cells,
-	double CellSize)
+	double CellSize,
+	const FVector2D& WorldOffset)
+{
+	ActiveMap = Map;
+	ActiveCells = Cells;
+	ActiveCellSize = CellSize;
+	ActiveWorldOffset = WorldOffset;
+	RebuildRenderCells();
+}
+
+void FFramedashEditorHeatmapOverlay::SetWorldOffset(const FVector2D& WorldOffset)
+{
+	if (ActiveWorldOffset.Equals(WorldOffset))
+	{
+		return;
+	}
+	ActiveWorldOffset = WorldOffset;
+	RebuildRenderCells();
+}
+
+void FFramedashEditorHeatmapOverlay::RebuildRenderCells()
 {
 	RenderCells.Reset();
-	RenderCells.Reserve(Cells.Num());
-	// Maps without a recorded Z floor render at world origin height instead of disappearing.
-	BaseZ = Map.WorldMinZ.Get(0.0);
-	const double MaxWeight = FramedashEditor::FindMaxWeight(Cells);
-	for (const FramedashEditor::FHeatmapCell& Cell : Cells)
+	RenderCells.Reserve(ActiveCells.Num());
+	CachedWorldBounds = FBox(EForceInit::ForceInit);
+	// Older 2D API responses fall back to the map floor instead of disappearing.
+	BaseZ = ActiveMap.WorldMinZ.Get(0.0);
+	const double MaxWeight = FramedashEditor::FindMaxWeight(ActiveCells);
+	for (const auto& Cell : ActiveCells)
 	{
 		FRenderCell& RenderCell = RenderCells.AddDefaulted_GetRef();
-		RenderCell.Rect = FramedashEditor::BuildCellRect(Cell, Map, CellSize);
+		RenderCell.Rect = FramedashEditor::BuildCellRect(
+			Cell,
+			ActiveMap,
+			ActiveCellSize,
+			ActiveWorldOffset);
+		RenderCell.WorldCorners = FramedashEditor::BuildHeatmapCellCorners(
+			RenderCell.Rect,
+			Cell,
+			BaseZ,
+			ActiveCellSize);
+		RenderCell.bVolumetric = FramedashEditor::IsVolumetricHeatmapCell(
+			Cell,
+			ActiveCellSize);
+		for (const auto& Corner : RenderCell.WorldCorners)
+		{
+			CachedWorldBounds += Corner;
+		}
 		RenderCell.NormalizedWeight = FramedashEditor::NormalizeWeight(Cell.Weight, MaxWeight);
 	}
 	if (GEditor != nullptr)
@@ -51,6 +88,12 @@ void FFramedashEditorHeatmapOverlay::SetData(
 void FFramedashEditorHeatmapOverlay::ClearData()
 {
 	RenderCells.Reset();
+	CachedWorldBounds = FBox(EForceInit::ForceInit);
+	ActiveMap = FramedashEditor::FMapInfo{};
+	ActiveCells.Reset();
+	ActiveCellSize = 0.0;
+	ActiveWorldOffset = FVector2D::ZeroVector;
+	BaseZ = 0.0;
 	if (GEditor != nullptr)
 	{
 		GEditor->RedrawLevelEditingViewports(false);
@@ -74,6 +117,19 @@ void FFramedashEditorHeatmapOverlay::SetEnabled(bool bInEnabled)
 	}
 }
 
+bool FFramedashEditorHeatmapOverlay::GetWorldBounds(FBox& OutBounds) const
+{
+	if (!CachedWorldBounds.IsValid)
+	{
+		return false;
+	}
+
+	const UFramedashEditorSettings* Settings = GetDefault<UFramedashEditorSettings>();
+	const double ZOffset = Settings != nullptr ? static_cast<double>(Settings->ZOffset) : 0.0;
+	OutBounds = FramedashEditor::BuildHeatmapFramingBounds(CachedWorldBounds, ZOffset);
+	return true;
+}
+
 void FFramedashEditorHeatmapOverlay::Shutdown()
 {
 	if (bShuttingDown)
@@ -88,6 +144,8 @@ void FFramedashEditorHeatmapOverlay::Shutdown()
 	BeginPIEHandle.Reset();
 	EndPIEHandle.Reset();
 	RenderCells.Reset();
+	CachedWorldBounds = FBox(EForceInit::ForceInit);
+	ActiveCells.Reset();
 	if (GEditor != nullptr)
 	{
 		GEditor->RedrawLevelEditingViewports(false);
@@ -129,8 +187,8 @@ void FFramedashEditorHeatmapOverlay::Draw(UCanvas* Canvas, APlayerController*)
 	{
 		return;
 	}
-	const double DrawZ = BaseZ + static_cast<double>(Settings->ZOffset);
 	const float Opacity = FMath::Clamp(Settings->OverlayOpacity, 0.0f, 1.0f);
+	const FVector ZOffset(0.0, 0.0, static_cast<double>(Settings->ZOffset));
 
 	FBatchedElements* Triangles = Canvas->Canvas->GetBatchedElements(
 		FCanvas::ET_Triangle,
@@ -141,29 +199,35 @@ void FFramedashEditorHeatmapOverlay::Draw(UCanvas* Canvas, APlayerController*)
 	{
 		return;
 	}
-	Triangles->ReserveVertices(RenderCells.Num() * 4);
-	Triangles->AddReserveTriangles(RenderCells.Num() * 2, GWhiteTexture, SE_BLEND_Translucent);
+	Triangles->ReserveVertices(RenderCells.Num() * 8);
+	Triangles->AddReserveTriangles(RenderCells.Num() * 12, GWhiteTexture, SE_BLEND_Translucent);
 	const FHitProxyId HitProxyId = Canvas->Canvas->GetHitProxyId();
+	static const int32 VoxelTriangles[12][3] = {
+		{0, 2, 1}, {0, 3, 2},
+		{4, 5, 6}, {6, 7, 4},
+		{0, 1, 5}, {5, 4, 0},
+		{1, 2, 6}, {6, 5, 1},
+		{2, 3, 7}, {7, 6, 2},
+		{3, 0, 4}, {4, 7, 3},
+	};
+	static const int32 FlatTriangles[2][3] = {
+		{0, 1, 2}, {2, 3, 0},
+	};
 
-	for (const FRenderCell& Cell : RenderCells)
+	for (const auto& Cell : RenderCells)
 	{
-		const FVector WorldCorners[4] = {
-			FVector(Cell.Rect.MinX, Cell.Rect.MinY, DrawZ),
-			FVector(Cell.Rect.MaxX, Cell.Rect.MinY, DrawZ),
-			FVector(Cell.Rect.MaxX, Cell.Rect.MaxY, DrawZ),
-			FVector(Cell.Rect.MinX, Cell.Rect.MaxY, DrawZ),
-		};
-
-		FVector2D ScreenCorners[4];
+		FVector2D ScreenCorners[8];
 		bool bBehindView = false;
-		for (int32 CornerIndex = 0; CornerIndex < 4; ++CornerIndex)
+		const int32 CornerCount = Cell.bVolumetric ? 8 : 4;
+		for (int32 CornerIndex = 0; CornerIndex < CornerCount; ++CornerIndex)
 		{
-			if (Canvas->SceneView->Project(WorldCorners[CornerIndex]).W <= 0.0)
+			const FVector WorldCorner = Cell.WorldCorners[CornerIndex] + ZOffset;
+			if (Canvas->SceneView->Project(WorldCorner).W <= 0.0)
 			{
 				bBehindView = true;
 				break;
 			}
-			const FVector Screen = Canvas->Project(WorldCorners[CornerIndex], false);
+			const FVector Screen = Canvas->Project(WorldCorner, false);
 			ScreenCorners[CornerIndex] = FVector2D(Screen.X, Screen.Y);
 		}
 		if (bBehindView)
@@ -172,28 +236,43 @@ void FFramedashEditorHeatmapOverlay::Draw(UCanvas* Canvas, APlayerController*)
 		}
 
 		const FLinearColor Color = FramedashEditor::HeatmapColor(Cell.NormalizedWeight, Opacity);
-		const int32 Vertex0 = Triangles->AddVertexf(
-			FVector4f(static_cast<float>(ScreenCorners[0].X), static_cast<float>(ScreenCorners[0].Y), 0.0f, 1.0f),
-			FVector2f::ZeroVector,
-			Color,
-			HitProxyId);
-		const int32 Vertex1 = Triangles->AddVertexf(
-			FVector4f(static_cast<float>(ScreenCorners[1].X), static_cast<float>(ScreenCorners[1].Y), 0.0f, 1.0f),
-			FVector2f::ZeroVector,
-			Color,
-			HitProxyId);
-		const int32 Vertex2 = Triangles->AddVertexf(
-			FVector4f(static_cast<float>(ScreenCorners[2].X), static_cast<float>(ScreenCorners[2].Y), 0.0f, 1.0f),
-			FVector2f::ZeroVector,
-			Color,
-			HitProxyId);
-		const int32 Vertex3 = Triangles->AddVertexf(
-			FVector4f(static_cast<float>(ScreenCorners[3].X), static_cast<float>(ScreenCorners[3].Y), 0.0f, 1.0f),
-			FVector2f::ZeroVector,
-			Color,
-			HitProxyId);
-		Triangles->AddTriangle(Vertex0, Vertex1, Vertex2, GWhiteTexture, SE_BLEND_Translucent);
-		Triangles->AddTriangle(Vertex2, Vertex3, Vertex0, GWhiteTexture, SE_BLEND_Translucent);
+		int32 VertexIndices[8];
+		for (int32 CornerIndex = 0; CornerIndex < CornerCount; ++CornerIndex)
+		{
+			VertexIndices[CornerIndex] = Triangles->AddVertexf(
+				FVector4f(
+					static_cast<float>(ScreenCorners[CornerIndex].X),
+					static_cast<float>(ScreenCorners[CornerIndex].Y),
+					0.0f,
+					1.0f),
+				FVector2f::ZeroVector,
+				Color,
+				HitProxyId);
+		}
+		if (Cell.bVolumetric)
+		{
+			for (const auto& Triangle : VoxelTriangles)
+			{
+				Triangles->AddTriangle(
+					VertexIndices[Triangle[0]],
+					VertexIndices[Triangle[1]],
+					VertexIndices[Triangle[2]],
+					GWhiteTexture,
+					SE_BLEND_Translucent);
+			}
+		}
+		else
+		{
+			for (const auto& Triangle : FlatTriangles)
+			{
+				Triangles->AddTriangle(
+					VertexIndices[Triangle[0]],
+					VertexIndices[Triangle[1]],
+					VertexIndices[Triangle[2]],
+					GWhiteTexture,
+					SE_BLEND_Translucent);
+			}
+		}
 	}
 }
 

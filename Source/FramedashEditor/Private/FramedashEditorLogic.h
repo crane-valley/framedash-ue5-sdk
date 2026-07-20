@@ -28,6 +28,7 @@ namespace FramedashEditor
 	{
 		double X = 0.0;
 		double Y = 0.0;
+		TOptional<double> Z;
 		double Weight = 0.0;
 		double EventCount = 0.0;
 		double AverageFps = 0.0;
@@ -49,8 +50,23 @@ namespace FramedashEditor
 	bool ParseHeatmapResponse(const FString& Json, TArray<FHeatmapCell>& OutCells, FString& OutError);
 	FString ParseProblemMessage(const FString& Json, const FString& Fallback);
 
-	FCellRect BuildCellRect(const FHeatmapCell& Cell, const FMapInfo& Map, double CellSize);
+	FCellRect BuildCellRect(
+		const FHeatmapCell& Cell,
+		const FMapInfo& Map,
+		double CellSize,
+		const FVector2D& WorldOffset = FVector2D::ZeroVector);
 	double FindMaxWeight(const TArray<FHeatmapCell>& Cells);
 	double NormalizeWeight(double Weight, double MaxWeight);
+	TStaticArray<FVector, 8> BuildVoxelCorners(
+		const FCellRect& Rect,
+		double CenterZ,
+		double CellSize);
+	TStaticArray<FVector, 8> BuildHeatmapCellCorners(
+		const FCellRect& Rect,
+		const FHeatmapCell& Cell,
+		double BaseZ,
+		double CellSize);
+	bool IsVolumetricHeatmapCell(const FHeatmapCell& Cell, double CellSize);
+	FBox BuildHeatmapFramingBounds(const FBox& CellBounds, double ZOffset = 0.0);
 	FLinearColor HeatmapColor(double NormalizedWeight, float Opacity);
 }

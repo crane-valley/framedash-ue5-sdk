@@ -280,7 +280,7 @@ TEST(IoStatsAccumulator, ConcurrentAddsSumCorrectly)
 			}
 		});
 	}
-	for (std::thread& Worker : Workers)
+	for (auto&& Worker : Workers)
 	{
 		Worker.join();
 	}

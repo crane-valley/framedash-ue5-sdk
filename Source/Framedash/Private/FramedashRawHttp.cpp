@@ -12,7 +12,7 @@ namespace
 	{
 		std::string Out;
 		Out.reserve(Value.size());
-		for (const char Ch : Value)
+		for (const auto& Ch : Value)
 		{
 			const unsigned char Byte = static_cast<unsigned char>(Ch);
 			const bool bOk = bRejectSpace
@@ -133,7 +133,7 @@ bool TryParseStatusCode(const char* Buffer, std::size_t Count, int& OutStatusCod
 		return false;
 	}
 	int Code = 0;
-	for (const char Ch : CodeToken)
+	for (const auto& Ch : CodeToken)
 	{
 		if (Ch < '0' || Ch > '9')
 		{
