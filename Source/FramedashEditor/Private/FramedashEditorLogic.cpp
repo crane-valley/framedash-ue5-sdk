@@ -8,6 +8,12 @@
 
 namespace FramedashEditor
 {
+FString ResolveReadApiKey(const FString& ConfiguredValue, const FString& EnvironmentValue)
+{
+	const FString Configured = ConfiguredValue.TrimStartAndEnd();
+	return Configured.IsEmpty() ? EnvironmentValue.TrimStartAndEnd() : Configured;
+}
+
 namespace
 {
 	bool DeserializeObject(const FString& Json, TSharedPtr<FJsonObject>& OutObject)

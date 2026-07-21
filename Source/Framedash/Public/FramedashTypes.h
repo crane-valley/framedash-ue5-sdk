@@ -100,5 +100,5 @@ namespace FramedashConstants
 }
 
 // String constants outside namespace to avoid UHT parsing issues with inline variables
-#define FRAMEDASH_SDK_VERSION TEXT("0.1.10")
+#define FRAMEDASH_SDK_VERSION TEXT("0.1.11")
 #define FRAMEDASH_SDK_NAME TEXT("ue5")

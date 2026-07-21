@@ -6,6 +6,8 @@
 
 namespace FramedashEditor
 {
+	FString ResolveReadApiKey(const FString& ConfiguredValue, const FString& EnvironmentValue);
+
 	struct FMapInfo
 	{
 		FString Id;

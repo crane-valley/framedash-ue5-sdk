@@ -2,7 +2,9 @@
 
 #include "FramedashEditorHttpClient.h"
 
+#include "HAL/PlatformMisc.h"
 #include "FramedashEditorEndpointSecurity.h"
+#include "FramedashEditorLogic.h"
 #include "FramedashEditorSettings.h"
 
 #include "GenericPlatform/GenericPlatformHttp.h"
@@ -192,7 +194,9 @@ bool FFramedashEditorHttpClient::PrepareRequest(
 	while (OutBaseUrl.RemoveFromEnd(TEXT("/")))
 	{
 	}
-	OutApiKey = Settings.ReadApiKey.TrimStartAndEnd();
+	OutApiKey = FramedashEditor::ResolveReadApiKey(
+		Settings.ReadApiKey,
+		FPlatformMisc::GetEnvironmentVariable(TEXT("FRAMEDASH_ANALYTICS_API_KEY")));
 	OutProjectId = Settings.ProjectId.TrimStartAndEnd();
 	if (OutBaseUrl.IsEmpty())
 	{
@@ -209,7 +213,7 @@ bool FFramedashEditorHttpClient::PrepareRequest(
 	}
 	if (OutApiKey.IsEmpty())
 	{
-		OutError = TEXT("Configure an analytics:read API key in Project Settings.");
+		OutError = TEXT("Configure an analytics:read API key in Project Settings or set FRAMEDASH_ANALYTICS_API_KEY before launching Unreal Editor.");
 		return false;
 	}
 	if (OutProjectId.IsEmpty())
