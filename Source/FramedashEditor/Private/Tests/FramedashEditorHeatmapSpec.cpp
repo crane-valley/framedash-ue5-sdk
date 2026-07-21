@@ -16,6 +16,25 @@ END_DEFINE_SPEC(FFramedashEditorHeatmapSpec)
 
 void FFramedashEditorHeatmapSpec::Define()
 {
+	Describe("read API key resolution", [this]()
+	{
+		It("prefers the configured key and trims it", [this]()
+		{
+			TestEqual(
+				TEXT("configured key wins"),
+				FramedashEditor::ResolveReadApiKey(TEXT(" configured-key "), TEXT("environment-key")),
+				FString(TEXT("configured-key")));
+		});
+
+		It("uses the process environment value when no key is configured", [this]()
+		{
+			TestEqual(
+				TEXT("environment fallback"),
+				FramedashEditor::ResolveReadApiKey(TEXT("  "), TEXT(" environment-key ")),
+				FString(TEXT("environment-key")));
+		});
+	});
+
 	Describe("REST response parsing", [this]()
 	{
 		It("parses a valid maps response", [this]()

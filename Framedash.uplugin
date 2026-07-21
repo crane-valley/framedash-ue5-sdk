@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 11,
-	"VersionName": "0.1.10",
+	"Version": 12,
+	"VersionName": "0.1.11",
 	"FriendlyName": "Framedash",
 	"Description": "Game Telemetry SDK",
 	"Category": "Other",

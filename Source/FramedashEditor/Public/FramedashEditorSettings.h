@@ -14,8 +14,8 @@ class FRAMEDASHEDITOR_API UFramedashEditorSettings : public UDeveloperSettings
 public:
 	UFramedashEditorSettings();
 
-	/** Read-only API key carrying the analytics:read scope. */
-	UPROPERTY(Config, EditAnywhere, Category="Authentication", meta=(DisplayName="Read API Key"))
+	/** Read-only API key carrying analytics:read; leave empty to use FRAMEDASH_ANALYTICS_API_KEY without persistence. */
+	UPROPERTY(Config, EditAnywhere, Category="Authentication", meta=(DisplayName="Read API Key (Optional)"))
 	FString ReadApiKey;
 
 	/** Framedash application base URL used by the editor REST client. */

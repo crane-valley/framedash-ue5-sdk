@@ -6,6 +6,15 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-07-22
+
+### Added
+
+- The editor heatmap can read its `analytics:read` key from
+  `FRAMEDASH_ANALYTICS_API_KEY` when the Project Settings key is empty. The
+  environment value is used only by the current Unreal Editor process and is
+  never persisted; an explicitly configured key still wins.
+
 ## [0.1.10] - 2026-07-20
 
 ### Fixed
