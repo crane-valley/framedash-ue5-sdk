@@ -6,6 +6,12 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-07-24
+
+### Changed
+
+- The plugin descriptor now links directly to the public Framedash Fab listing.
+
 ## [0.1.11] - 2026-07-22
 
 ### Added
