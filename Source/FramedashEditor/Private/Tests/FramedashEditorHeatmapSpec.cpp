@@ -6,9 +6,22 @@
 
 #include "Misc/AutomationTest.h"
 
+#include "FramedashEditor.h"
 #include "FramedashEditorEndpointSecurity.h"
+#include "FramedashEditorHeatmapComponent.h"
+#include "FramedashEditorHeatmapLayout.h"
 #include "FramedashEditorHeatmapOverlay.h"
+#include "FramedashEditorHeatmapPanel.h"
+#include "FramedashEditorHeatmapRenderData.h"
+#include "FramedashEditorHeatmapVisibility.h"
 #include "FramedashEditorLogic.h"
+#include "FramedashEditorSettings.h"
+#include "Modules/ModuleManager.h"
+#include "ShowFlags.h"
+#include "PrimitiveViewRelevance.h"
+#include "ToolMenu.h"
+#include "ToolMenuSection.h"
+#include "ToolMenus.h"
 
 BEGIN_DEFINE_SPEC(FFramedashEditorHeatmapSpec, "Framedash.Editor.Heatmap.Logic",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -16,6 +29,82 @@ END_DEFINE_SPEC(FFramedashEditorHeatmapSpec)
 
 void FFramedashEditorHeatmapSpec::Define()
 {
+	Describe("editor integration", [this]()
+	{
+		It("registers one nested Window menu command", [this]()
+		{
+			UToolMenu* WindowMenu =
+				UToolMenus::Get()->FindMenu(TEXT("LevelEditor.MainMenu.Window"));
+			UToolMenu* FramedashMenu =
+				UToolMenus::Get()->FindMenu(
+					TEXT("LevelEditor.MainMenu.Window.Framedash"));
+
+			TestNotNull(TEXT("Window menu exists"), WindowMenu);
+			TestNotNull(TEXT("Framedash submenu exists"), FramedashMenu);
+			if (WindowMenu != nullptr)
+			{
+				TestTrue(
+					TEXT("Window contains one Framedash submenu entry"),
+					WindowMenu->ContainsEntry(TEXT("Framedash")));
+				TestFalse(
+					TEXT("heatmap command is not duplicated at Window root"),
+					WindowMenu->ContainsEntry(TEXT("OpenFramedashHeatmap")));
+			}
+			if (FramedashMenu != nullptr)
+			{
+				TestTrue(
+					TEXT("nested submenu contains the heatmap command"),
+					FramedashMenu->ContainsEntry(TEXT("OpenFramedashHeatmap")));
+			}
+		});
+
+		It("keeps the map selector usable in a narrow dock", [this]()
+		{
+			TestTrue(
+				TEXT("map selector has a compact minimum width"),
+				FramedashEditor::HeatmapMapSelectorMinimumWidth >= 180.0f);
+		});
+
+		It("keeps the overlay alive when the data panel closes", [this]()
+		{
+			FFramedashEditorModule& Module =
+				FModuleManager::GetModuleChecked<FFramedashEditorModule>(
+					TEXT("FramedashEditor"));
+			const TSharedPtr<FFramedashEditorHeatmapOverlay> Overlay =
+				Module.GetHeatmapOverlayForTesting();
+			FramedashEditor::FMapInfo Map;
+			Map.WorldMaxX = 100.0;
+			Map.WorldMaxY = 100.0;
+			TArray<FramedashEditor::FHeatmapCell> Cells;
+			FramedashEditor::FHeatmapCell& Cell = Cells.AddDefaulted_GetRef();
+			Cell.X = 12.5;
+			Cell.Y = 12.5;
+			Overlay->SetData(Map, Cells, 25.0);
+			TSharedPtr<SFramedashEditorHeatmapPanel> Panel =
+				SNew(SFramedashEditorHeatmapPanel)
+				.Overlay(Overlay);
+			FBox Bounds;
+
+			TestTrue(TEXT("module owns the overlay before panel closure"),
+				Module.HasHeatmapOverlayForTesting());
+			TestTrue(
+				TEXT("opening controls preserves loaded overlay data"),
+				Overlay->GetWorldBounds(Bounds));
+			Panel.Reset();
+			TestTrue(TEXT("panel closure does not destroy the overlay"),
+				Module.HasHeatmapOverlayForTesting() && Overlay.IsValid());
+
+			Panel =
+				SNew(SFramedashEditorHeatmapPanel)
+				.Overlay(Overlay);
+			TestTrue(
+				TEXT("reopening controls preserves loaded overlay data"),
+				Overlay->GetWorldBounds(Bounds));
+			Panel.Reset();
+			Overlay->ClearData();
+		});
+	});
+
 	Describe("read API key resolution", [this]()
 	{
 		It("prefers the configured key and trims it", [this]()
@@ -111,6 +200,81 @@ void FFramedashEditorHeatmapSpec::Define()
 
 	Describe("heatmap geometry", [this]()
 	{
+		It("keeps the viewport show flag off by default and independent per viewport", [this]()
+		{
+			FEngineShowFlags FirstViewport(ESFIM_Editor);
+			FEngineShowFlags SecondViewport(ESFIM_Editor);
+
+			TestFalse(
+				TEXT("first viewport starts hidden"),
+				FramedashEditor::IsHeatmapShowFlagEnabled(FirstViewport));
+			TestFalse(
+				TEXT("second viewport starts hidden"),
+				FramedashEditor::IsHeatmapShowFlagEnabled(SecondViewport));
+
+			TestTrue(
+				TEXT("show flag can be enabled"),
+				FramedashEditor::SetHeatmapShowFlagEnabled(FirstViewport, true));
+			TestTrue(
+				TEXT("first viewport is enabled"),
+				FramedashEditor::IsHeatmapShowFlagEnabled(FirstViewport));
+			TestFalse(
+				TEXT("second viewport remains independent"),
+				FramedashEditor::IsHeatmapShowFlagEnabled(SecondViewport));
+		});
+
+		It("suspends rendering for PIE without changing the viewport choice", [this]()
+		{
+			FEngineShowFlags ViewportFlags(ESFIM_Editor);
+			FramedashEditor::SetHeatmapShowFlagEnabled(ViewportFlags, true);
+
+			TestTrue(
+				TEXT("editor view renders before PIE"),
+				FramedashEditor::ShouldRenderHeatmap(ViewportFlags, false));
+			TestFalse(
+				TEXT("PIE suspends the overlay"),
+				FramedashEditor::ShouldRenderHeatmap(ViewportFlags, true));
+			TestTrue(
+				TEXT("the prior editor choice restores after PIE"),
+				FramedashEditor::ShouldRenderHeatmap(ViewportFlags, false));
+		});
+
+		It("suspends a scene component created after PIE begins", [this]()
+		{
+			FramedashEditor::FMapInfo Map;
+			Map.WorldMaxX = 100.0;
+			Map.WorldMaxY = 100.0;
+			TArray<FramedashEditor::FHeatmapCell> Cells;
+			FramedashEditor::FHeatmapCell& Cell = Cells.AddDefaulted_GetRef();
+			Cell.X = 12.5;
+			Cell.Y = 12.5;
+
+			FFramedashEditorHeatmapOverlay Overlay;
+			FEditorDelegates::BeginPIE.Broadcast(false);
+			Overlay.SetData(Map, Cells, 25.0);
+			UFramedashEditorHeatmapComponent* Component =
+				Overlay.GetRenderComponentForTesting();
+			TestNotNull(TEXT("in-flight response creates a scene component"), Component);
+			if (Component != nullptr)
+			{
+				TestTrue(
+					TEXT("component created during PIE stays suspended"),
+					Component->IsPIESuspended());
+			}
+			FEditorDelegates::EndPIE.Broadcast(false);
+		});
+
+		It("keeps standard and high-resolution screenshots on the scene main pass", [this]()
+		{
+			FPrimitiveViewRelevance Relevance;
+			FramedashEditor::ConfigureHeatmapViewRelevance(Relevance, true);
+
+			TestTrue(TEXT("visible heatmap draws"), Relevance.bDrawRelevance);
+			TestTrue(TEXT("heatmap uses dynamic scene geometry"), Relevance.bDynamicRelevance);
+			TestTrue(TEXT("F9 and high-resolution capture include the main pass"),
+				Relevance.bRenderInMainPass);
+		});
+
 		It("reconstructs an interior cell", [this]()
 		{
 			FramedashEditor::FMapInfo Map;
@@ -234,6 +398,49 @@ void FFramedashEditorHeatmapSpec::Define()
 			TestTrue(TEXT("hot is red"), Hot.Equals(FLinearColor(1.0f, 0.05f, 0.0f, 0.6f)));
 		});
 
+		It("batches representative multi-height cells without changing cell or color semantics", [this]()
+		{
+			TArray<FramedashEditor::FHeatmapSceneCell> SceneCells;
+			const TStaticArray<double, 3> Weights = {1.0, 0.0, 0.5};
+			for (int32 CellIndex = 0; CellIndex < 3; ++CellIndex)
+			{
+				FramedashEditor::FHeatmapSceneCell& SceneCell =
+					SceneCells.AddDefaulted_GetRef();
+				const double CenterZ = 25.0 + CellIndex * 50.0;
+				SceneCell.WorldCorners = FramedashEditor::BuildVoxelCorners(
+					FramedashEditor::FCellRect{
+						static_cast<double>(CellIndex * 25),
+						0.0,
+						static_cast<double>((CellIndex + 1) * 25),
+						25.0},
+					CenterZ,
+					25.0);
+				SceneCell.NormalizedWeight = Weights[CellIndex];
+				SceneCell.bVolumetric = true;
+			}
+
+			const FramedashEditor::FHeatmapRenderData RenderData =
+				FramedashEditor::BuildHeatmapRenderData(SceneCells, 0.6f, 10.0);
+
+			TestEqual(TEXT("all cloud cells remain represented"), RenderData.CellCount, 3);
+			TestEqual(TEXT("three voxels keep twelve triangles each"), RenderData.TriangleCount, 36);
+			TestEqual(TEXT("three distinct weights retain three colors"), RenderData.Buckets.Num(), 3);
+			TestTrue(TEXT("low weight draws first and remains blue"),
+				RenderData.Buckets[0].Color.Equals(
+					FramedashEditor::HeatmapColor(0.0, 0.6f)));
+			TestTrue(TEXT("high weight draws last and remains red"),
+				RenderData.Buckets.Last().Color.Equals(
+					FramedashEditor::HeatmapColor(1.0, 0.6f)));
+			TestEqual(
+				TEXT("display Z offset applies to scene geometry"),
+				static_cast<double>(RenderData.Bounds.Min.Z),
+				23.75);
+			TestEqual(
+				TEXT("multi-height maximum remains distinct"),
+				static_cast<double>(RenderData.Bounds.Max.Z),
+				146.25);
+		});
+
 		It("adds compact proportional padding for viewport framing", [this]()
 		{
 			const FBox CellBounds(FVector(0.0, 0.0, 100.0), FVector(50.0, 50.0, 100.0));
@@ -278,6 +485,84 @@ void FFramedashEditorHeatmapSpec::Define()
 			TestFalse(
 				TEXT("cleared data has no framing bounds"),
 				Overlay.GetWorldBounds(Bounds));
+		});
+
+		It("releases the registered scene component when data is cleared", [this]()
+		{
+			FramedashEditor::FMapInfo Map;
+			Map.WorldMaxX = 100.0;
+			Map.WorldMaxY = 100.0;
+			TArray<FramedashEditor::FHeatmapCell> Cells;
+			FramedashEditor::FHeatmapCell& Cell = Cells.AddDefaulted_GetRef();
+			Cell.X = 12.5;
+			Cell.Y = 12.5;
+
+			FFramedashEditorHeatmapOverlay Overlay;
+			Overlay.SetData(Map, Cells, 25.0);
+			UFramedashEditorHeatmapComponent* Component =
+				Overlay.GetRenderComponentForTesting();
+			TestNotNull(TEXT("loaded heatmap owns a scene component"), Component);
+			if (Component == nullptr)
+			{
+				return;
+			}
+			TestTrue(TEXT("loaded scene component is registered"), Component->IsRegistered());
+			const uint64 LoadedDataRevision = Overlay.GetDataRevision();
+
+			Overlay.ClearData();
+
+			TestFalse(TEXT("cleared scene component is unregistered"), Component->IsRegistered());
+			TestFalse(
+				TEXT("clear invalidates in-flight response generations"),
+				Overlay.IsDataRevisionCurrent(LoadedDataRevision));
+			TestNull(
+				TEXT("cleared overlay releases the scene component"),
+				Overlay.GetRenderComponentForTesting());
+		});
+
+		It("invalidates loaded data when query settings change without a panel", [this]()
+		{
+			UFramedashEditorSettings* Settings =
+				GetMutableDefault<UFramedashEditorSettings>();
+			TestNotNull(TEXT("editor settings are available"), Settings);
+			if (Settings == nullptr)
+			{
+				return;
+			}
+
+			FramedashEditor::FMapInfo Map;
+			Map.WorldMaxX = 100.0;
+			Map.WorldMaxY = 100.0;
+			TArray<FramedashEditor::FHeatmapCell> Cells;
+			FramedashEditor::FHeatmapCell& Cell = Cells.AddDefaulted_GetRef();
+			Cell.X = 12.5;
+			Cell.Y = 12.5;
+
+			FFramedashEditorHeatmapOverlay Overlay;
+			Overlay.SetData(Map, Cells, 25.0);
+			FBox Bounds;
+			TestTrue(TEXT("loaded data starts valid"), Overlay.GetWorldBounds(Bounds));
+
+			const int32 OriginalDays = Settings->Days;
+			Settings->Days = OriginalDays == 30 ? 14 : 30;
+			FProperty* DaysProperty = FindFProperty<FProperty>(
+				UFramedashEditorSettings::StaticClass(),
+				GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, Days));
+			FPropertyChangedEvent DaysChangedEvent(
+				DaysProperty,
+				EPropertyChangeType::ValueSet);
+			FCoreUObjectDelegates::OnObjectPropertyChanged.Broadcast(
+				Settings,
+				DaysChangedEvent);
+
+			TestFalse(
+				TEXT("query change clears module-owned overlay data"),
+				Overlay.GetWorldBounds(Bounds));
+
+			Settings->Days = OriginalDays;
+			FCoreUObjectDelegates::OnObjectPropertyChanged.Broadcast(
+				Settings,
+				DaysChangedEvent);
 		});
 	});
 

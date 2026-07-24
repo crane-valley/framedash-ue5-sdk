@@ -3,11 +3,15 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "UObject/StrongObjectPtr.h"
 
+#include "FramedashEditorHeatmapRenderData.h"
 #include "FramedashEditorLogic.h"
 
-class APlayerController;
-class UCanvas;
+class UFramedashEditorHeatmapComponent;
+class UObject;
+class UWorld;
+struct FPropertyChangedEvent;
 
 class FFramedashEditorHeatmapOverlay
 {
@@ -22,36 +26,58 @@ public:
 		const FVector2D& WorldOffset = FVector2D::ZeroVector);
 	void SetWorldOffset(const FVector2D& WorldOffset);
 	void ClearData();
-	void SetEnabled(bool bEnabled);
 	bool GetWorldBounds(FBox& OutBounds) const;
+	uint64 GetDataRevision() const { return DataRevision; }
+	bool IsDataRevisionCurrent(uint64 Revision) const
+	{
+		return Revision == DataRevision;
+	}
 	void Shutdown();
 
-private:
-	struct FRenderCell
+#if WITH_DEV_AUTOMATION_TESTS
+	UFramedashEditorHeatmapComponent* GetRenderComponentForTesting() const
 	{
-		FramedashEditor::FCellRect Rect;
-		TStaticArray<FVector, 8> WorldCorners;
-		double NormalizedWeight = 0.0;
-		bool bVolumetric = false;
-	};
+		return RenderComponent.Get();
+	}
+#endif
 
+private:
 	void RebuildRenderCells();
-	void RegisterDrawDelegate();
-	void UnregisterDrawDelegate();
-	void Draw(UCanvas* Canvas, APlayerController* PlayerController);
+	void RefreshRenderComponent();
+	void EnsureRenderComponentRegistered();
+	void ReleaseRenderComponent();
+	void CaptureQuerySettings();
+	void OnSettingsObjectPropertyChanged(
+		UObject* Object,
+		FPropertyChangedEvent& PropertyChangedEvent);
+	void OnMapChanged(uint32 MapChangeFlags);
+	void OnWorldCleanup(
+		UWorld* World,
+		bool bSessionEnded,
+		bool bCleanupResources);
 	void OnBeginPIE(bool bIsSimulating);
 	void OnEndPIE(bool bIsSimulating);
 
-	TArray<FRenderCell> RenderCells;
+	TArray<FramedashEditor::FHeatmapSceneCell> RenderCells;
 	FBox CachedWorldBounds = FBox(EForceInit::ForceInit);
 	FramedashEditor::FMapInfo ActiveMap;
 	TArray<FramedashEditor::FHeatmapCell> ActiveCells;
+	TStrongObjectPtr<UFramedashEditorHeatmapComponent> RenderComponent;
+	FString ObservedReadApiKey;
+	FString ObservedApiBaseUrl;
+	FString ObservedProjectId;
+	FString ObservedEventNameFilter;
 	double ActiveCellSize = 0.0;
 	FVector2D ActiveWorldOffset = FVector2D::ZeroVector;
 	double BaseZ = 0.0;
-	bool bEnabled = false;
+	uint64 DataRevision = 0;
+	int32 ObservedDays = 7;
+	int32 ObservedCellSize = 25;
 	bool bShuttingDown = false;
-	FDelegateHandle DrawHandle;
+	bool bPIESuspended = false;
+	FDelegateHandle SettingsChangedHandle;
+	FDelegateHandle MapChangedHandle;
+	FDelegateHandle WorldCleanupHandle;
 	FDelegateHandle BeginPIEHandle;
 	FDelegateHandle EndPIEHandle;
 };

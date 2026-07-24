@@ -2,17 +2,26 @@
 
 #include "FramedashEditorHeatmapOverlay.h"
 
+#include "FramedashEditorHeatmapComponent.h"
 #include "FramedashEditorSettings.h"
 
-#include "BatchedElements.h"
-#include "Debug/DebugDrawService.h"
 #include "Editor.h"
-#include "Engine/Canvas.h"
-#include "GlobalRenderResources.h"
-#include "SceneView.h"
+#include "Engine/World.h"
+#include "UObject/UObjectGlobals.h"
+#include "UObject/UnrealType.h"
 
 FFramedashEditorHeatmapOverlay::FFramedashEditorHeatmapOverlay()
 {
+	CaptureQuerySettings();
+	SettingsChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(
+		this,
+		&FFramedashEditorHeatmapOverlay::OnSettingsObjectPropertyChanged);
+	MapChangedHandle = FEditorDelegates::MapChange.AddRaw(
+		this,
+		&FFramedashEditorHeatmapOverlay::OnMapChanged);
+	WorldCleanupHandle = FWorldDelegates::OnWorldCleanup.AddRaw(
+		this,
+		&FFramedashEditorHeatmapOverlay::OnWorldCleanup);
 	BeginPIEHandle = FEditorDelegates::BeginPIE.AddRaw(
 		this,
 		&FFramedashEditorHeatmapOverlay::OnBeginPIE);
@@ -54,39 +63,126 @@ void FFramedashEditorHeatmapOverlay::RebuildRenderCells()
 	RenderCells.Reset();
 	RenderCells.Reserve(ActiveCells.Num());
 	CachedWorldBounds = FBox(EForceInit::ForceInit);
-	// Older 2D API responses fall back to the map floor instead of disappearing.
 	BaseZ = ActiveMap.WorldMinZ.Get(0.0);
 	const double MaxWeight = FramedashEditor::FindMaxWeight(ActiveCells);
 	for (const auto& Cell : ActiveCells)
 	{
-		FRenderCell& RenderCell = RenderCells.AddDefaulted_GetRef();
-		RenderCell.Rect = FramedashEditor::BuildCellRect(
+		FramedashEditor::FHeatmapSceneCell& RenderCell =
+			RenderCells.AddDefaulted_GetRef();
+		const FramedashEditor::FCellRect Rect = FramedashEditor::BuildCellRect(
 			Cell,
 			ActiveMap,
 			ActiveCellSize,
 			ActiveWorldOffset);
 		RenderCell.WorldCorners = FramedashEditor::BuildHeatmapCellCorners(
-			RenderCell.Rect,
+			Rect,
 			Cell,
 			BaseZ,
 			ActiveCellSize);
 		RenderCell.bVolumetric = FramedashEditor::IsVolumetricHeatmapCell(
 			Cell,
 			ActiveCellSize);
-		for (const auto& Corner : RenderCell.WorldCorners)
+		const int32 CornerCount = RenderCell.bVolumetric ? 8 : 4;
+		for (int32 CornerIndex = 0; CornerIndex < CornerCount; ++CornerIndex)
 		{
-			CachedWorldBounds += Corner;
+			CachedWorldBounds += RenderCell.WorldCorners[CornerIndex];
 		}
-		RenderCell.NormalizedWeight = FramedashEditor::NormalizeWeight(Cell.Weight, MaxWeight);
+		RenderCell.NormalizedWeight =
+			FramedashEditor::NormalizeWeight(Cell.Weight, MaxWeight);
 	}
+	RefreshRenderComponent();
+}
+
+void FFramedashEditorHeatmapOverlay::RefreshRenderComponent()
+{
+	if (bShuttingDown)
+	{
+		return;
+	}
+	if (RenderComponent.Get() == nullptr)
+	{
+		if (RenderCells.IsEmpty())
+		{
+			return;
+		}
+		RenderComponent.Reset(NewObject<UFramedashEditorHeatmapComponent>(
+			GetTransientPackage(),
+			NAME_None,
+			RF_Transient));
+		RenderComponent->SetPIESuspended(
+			bPIESuspended ||
+			(GEditor != nullptr && GEditor->PlayWorld != nullptr));
+	}
+
+	const UFramedashEditorSettings* Settings = GetDefault<UFramedashEditorSettings>();
+	const float Opacity = Settings != nullptr
+		? FMath::Clamp(Settings->OverlayOpacity, 0.0f, 1.0f)
+		: 0.6f;
+	const double ZOffset = Settings != nullptr
+		? static_cast<double>(Settings->ZOffset)
+		: 0.0;
+	RenderComponent->SetRenderData(
+		FramedashEditor::BuildHeatmapRenderData(
+			RenderCells,
+			Opacity,
+			ZOffset));
+	EnsureRenderComponentRegistered();
 	if (GEditor != nullptr)
 	{
 		GEditor->RedrawLevelEditingViewports(false);
 	}
 }
 
+void FFramedashEditorHeatmapOverlay::EnsureRenderComponentRegistered()
+{
+	if (bShuttingDown || RenderComponent.Get() == nullptr || GEditor == nullptr)
+	{
+		return;
+	}
+
+	UWorld* EditorWorld = GEditor->GetEditorWorldContext().World();
+	if (EditorWorld == nullptr)
+	{
+		return;
+	}
+	if (!RenderComponent->IsRegistered())
+	{
+		RenderComponent->RegisterComponentWithWorld(EditorWorld);
+	}
+}
+
+void FFramedashEditorHeatmapOverlay::ReleaseRenderComponent()
+{
+	if (RenderComponent.Get() == nullptr)
+	{
+		return;
+	}
+	if (RenderComponent->IsRegistered())
+	{
+		RenderComponent->UnregisterComponent();
+	}
+	RenderComponent.Reset();
+}
+
+void FFramedashEditorHeatmapOverlay::CaptureQuerySettings()
+{
+	if (const UFramedashEditorSettings* Settings =
+		GetDefault<UFramedashEditorSettings>())
+	{
+		ObservedReadApiKey = Settings->ReadApiKey;
+		ObservedApiBaseUrl = Settings->ApiBaseUrl;
+		ObservedProjectId = Settings->ProjectId;
+		ObservedEventNameFilter = Settings->EventNameFilter;
+		ObservedDays = Settings->Days;
+		ObservedCellSize = Settings->CellSize;
+	}
+}
+
 void FFramedashEditorHeatmapOverlay::ClearData()
 {
+	++DataRevision;
+	CaptureQuerySettings();
+	ReleaseRenderComponent();
 	RenderCells.Reset();
 	CachedWorldBounds = FBox(EForceInit::ForceInit);
 	ActiveMap = FramedashEditor::FMapInfo{};
@@ -94,23 +190,6 @@ void FFramedashEditorHeatmapOverlay::ClearData()
 	ActiveCellSize = 0.0;
 	ActiveWorldOffset = FVector2D::ZeroVector;
 	BaseZ = 0.0;
-	if (GEditor != nullptr)
-	{
-		GEditor->RedrawLevelEditingViewports(false);
-	}
-}
-
-void FFramedashEditorHeatmapOverlay::SetEnabled(bool bInEnabled)
-{
-	bEnabled = bInEnabled;
-	if (bEnabled)
-	{
-		RegisterDrawDelegate();
-	}
-	else
-	{
-		UnregisterDrawDelegate();
-	}
 	if (GEditor != nullptr)
 	{
 		GEditor->RedrawLevelEditingViewports(false);
@@ -125,8 +204,12 @@ bool FFramedashEditorHeatmapOverlay::GetWorldBounds(FBox& OutBounds) const
 	}
 
 	const UFramedashEditorSettings* Settings = GetDefault<UFramedashEditorSettings>();
-	const double ZOffset = Settings != nullptr ? static_cast<double>(Settings->ZOffset) : 0.0;
-	OutBounds = FramedashEditor::BuildHeatmapFramingBounds(CachedWorldBounds, ZOffset);
+	const double ZOffset = Settings != nullptr
+		? static_cast<double>(Settings->ZOffset)
+		: 0.0;
+	OutBounds = FramedashEditor::BuildHeatmapFramingBounds(
+		CachedWorldBounds,
+		ZOffset);
 	return true;
 }
 
@@ -137,12 +220,17 @@ void FFramedashEditorHeatmapOverlay::Shutdown()
 		return;
 	}
 	bShuttingDown = true;
-	bEnabled = false;
-	UnregisterDrawDelegate();
+	FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(SettingsChangedHandle);
+	FEditorDelegates::MapChange.Remove(MapChangedHandle);
+	FWorldDelegates::OnWorldCleanup.Remove(WorldCleanupHandle);
 	FEditorDelegates::BeginPIE.Remove(BeginPIEHandle);
 	FEditorDelegates::EndPIE.Remove(EndPIEHandle);
+	SettingsChangedHandle.Reset();
+	MapChangedHandle.Reset();
+	WorldCleanupHandle.Reset();
 	BeginPIEHandle.Reset();
 	EndPIEHandle.Reset();
+	ReleaseRenderComponent();
 	RenderCells.Reset();
 	CachedWorldBounds = FBox(EForceInit::ForceInit);
 	ActiveCells.Reset();
@@ -152,139 +240,132 @@ void FFramedashEditorHeatmapOverlay::Shutdown()
 	}
 }
 
-void FFramedashEditorHeatmapOverlay::RegisterDrawDelegate()
+void FFramedashEditorHeatmapOverlay::OnSettingsObjectPropertyChanged(
+	UObject* Object,
+	FPropertyChangedEvent& PropertyChangedEvent)
 {
-	if (bShuttingDown || DrawHandle.IsValid() || (GEditor != nullptr && GEditor->PlayWorld != nullptr))
+	const UFramedashEditorSettings* Settings =
+		GetDefault<UFramedashEditorSettings>();
+	if (Settings == nullptr || Object != Settings)
 	{
 		return;
 	}
-	DrawHandle = UDebugDrawService::Register(
-		TEXT("Editor"),
-		FDebugDrawDelegate::CreateRaw(this, &FFramedashEditorHeatmapOverlay::Draw));
+
+	const FName PropertyName = PropertyChangedEvent.GetPropertyName();
+	const bool bCheckAllProperties = PropertyName.IsNone();
+	const bool bReadApiKeyProperty = bCheckAllProperties ||
+		PropertyName ==
+			GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, ReadApiKey);
+	const bool bApiBaseUrlProperty = bCheckAllProperties ||
+		PropertyName ==
+			GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, ApiBaseUrl);
+	const bool bProjectIdProperty = bCheckAllProperties ||
+		PropertyName ==
+			GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, ProjectId);
+	const bool bDaysProperty = bCheckAllProperties ||
+		PropertyName ==
+			GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, Days);
+	const bool bCellSizeProperty = bCheckAllProperties ||
+		PropertyName ==
+			GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, CellSize);
+	const bool bEventNameProperty = bCheckAllProperties ||
+		PropertyName ==
+			GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, EventNameFilter);
+
+	const bool bQuerySettingsChanged =
+		(bReadApiKeyProperty && ObservedReadApiKey != Settings->ReadApiKey) ||
+		(bApiBaseUrlProperty && ObservedApiBaseUrl != Settings->ApiBaseUrl) ||
+		(bProjectIdProperty && ObservedProjectId != Settings->ProjectId) ||
+		(bDaysProperty && ObservedDays != Settings->Days) ||
+		(bCellSizeProperty && ObservedCellSize != Settings->CellSize) ||
+		(bEventNameProperty &&
+			ObservedEventNameFilter != Settings->EventNameFilter);
+	if (bReadApiKeyProperty)
+	{
+		ObservedReadApiKey = Settings->ReadApiKey;
+	}
+	if (bApiBaseUrlProperty)
+	{
+		ObservedApiBaseUrl = Settings->ApiBaseUrl;
+	}
+	if (bProjectIdProperty)
+	{
+		ObservedProjectId = Settings->ProjectId;
+	}
+	if (bDaysProperty)
+	{
+		ObservedDays = Settings->Days;
+	}
+	if (bCellSizeProperty)
+	{
+		ObservedCellSize = Settings->CellSize;
+	}
+	if (bEventNameProperty)
+	{
+		ObservedEventNameFilter = Settings->EventNameFilter;
+	}
+	if (bQuerySettingsChanged)
+	{
+		ClearData();
+		return;
+	}
+
+	const bool bWorldOffsetXProperty = bCheckAllProperties ||
+		PropertyName ==
+			GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, WorldOffsetX);
+	const bool bWorldOffsetYProperty = bCheckAllProperties ||
+		PropertyName ==
+			GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, WorldOffsetY);
+	if (bWorldOffsetXProperty || bWorldOffsetYProperty)
+	{
+		SetWorldOffset(FVector2D(
+			Settings->WorldOffsetX,
+			Settings->WorldOffsetY));
+	}
+
+	if (bCheckAllProperties ||
+		PropertyName ==
+			GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, OverlayOpacity) ||
+		PropertyName ==
+			GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, ZOffset))
+	{
+		RefreshRenderComponent();
+	}
 }
 
-void FFramedashEditorHeatmapOverlay::UnregisterDrawDelegate()
+void FFramedashEditorHeatmapOverlay::OnMapChanged(uint32)
 {
-	if (!DrawHandle.IsValid())
-	{
-		return;
-	}
-	UDebugDrawService::Unregister(DrawHandle);
-	DrawHandle.Reset();
+	ClearData();
 }
 
-void FFramedashEditorHeatmapOverlay::Draw(UCanvas* Canvas, APlayerController*)
+void FFramedashEditorHeatmapOverlay::OnWorldCleanup(
+	UWorld* World,
+	bool,
+	bool)
 {
-	if (!bEnabled || bShuttingDown || Canvas == nullptr || Canvas->Canvas == nullptr ||
-		Canvas->SceneView == nullptr || RenderCells.IsEmpty() ||
-		(GEditor != nullptr && GEditor->PlayWorld != nullptr))
+	if (RenderComponent.Get() != nullptr &&
+		RenderComponent->IsRegistered() &&
+		RenderComponent->GetWorld() == World)
 	{
-		return;
-	}
-
-	const UFramedashEditorSettings* Settings = GetDefault<UFramedashEditorSettings>();
-	if (Settings == nullptr)
-	{
-		return;
-	}
-	const float Opacity = FMath::Clamp(Settings->OverlayOpacity, 0.0f, 1.0f);
-	const FVector ZOffset(0.0, 0.0, static_cast<double>(Settings->ZOffset));
-
-	FBatchedElements* Triangles = Canvas->Canvas->GetBatchedElements(
-		FCanvas::ET_Triangle,
-		nullptr,
-		GWhiteTexture,
-		SE_BLEND_Translucent);
-	if (Triangles == nullptr)
-	{
-		return;
-	}
-	Triangles->ReserveVertices(RenderCells.Num() * 8);
-	Triangles->AddReserveTriangles(RenderCells.Num() * 12, GWhiteTexture, SE_BLEND_Translucent);
-	const FHitProxyId HitProxyId = Canvas->Canvas->GetHitProxyId();
-	static const int32 VoxelTriangles[12][3] = {
-		{0, 2, 1}, {0, 3, 2},
-		{4, 5, 6}, {6, 7, 4},
-		{0, 1, 5}, {5, 4, 0},
-		{1, 2, 6}, {6, 5, 1},
-		{2, 3, 7}, {7, 6, 2},
-		{3, 0, 4}, {4, 7, 3},
-	};
-	static const int32 FlatTriangles[2][3] = {
-		{0, 1, 2}, {2, 3, 0},
-	};
-
-	for (const auto& Cell : RenderCells)
-	{
-		FVector2D ScreenCorners[8];
-		bool bBehindView = false;
-		const int32 CornerCount = Cell.bVolumetric ? 8 : 4;
-		for (int32 CornerIndex = 0; CornerIndex < CornerCount; ++CornerIndex)
-		{
-			const FVector WorldCorner = Cell.WorldCorners[CornerIndex] + ZOffset;
-			if (Canvas->SceneView->Project(WorldCorner).W <= 0.0)
-			{
-				bBehindView = true;
-				break;
-			}
-			const FVector Screen = Canvas->Project(WorldCorner, false);
-			ScreenCorners[CornerIndex] = FVector2D(Screen.X, Screen.Y);
-		}
-		if (bBehindView)
-		{
-			continue;
-		}
-
-		const FLinearColor Color = FramedashEditor::HeatmapColor(Cell.NormalizedWeight, Opacity);
-		int32 VertexIndices[8];
-		for (int32 CornerIndex = 0; CornerIndex < CornerCount; ++CornerIndex)
-		{
-			VertexIndices[CornerIndex] = Triangles->AddVertexf(
-				FVector4f(
-					static_cast<float>(ScreenCorners[CornerIndex].X),
-					static_cast<float>(ScreenCorners[CornerIndex].Y),
-					0.0f,
-					1.0f),
-				FVector2f::ZeroVector,
-				Color,
-				HitProxyId);
-		}
-		if (Cell.bVolumetric)
-		{
-			for (const auto& Triangle : VoxelTriangles)
-			{
-				Triangles->AddTriangle(
-					VertexIndices[Triangle[0]],
-					VertexIndices[Triangle[1]],
-					VertexIndices[Triangle[2]],
-					GWhiteTexture,
-					SE_BLEND_Translucent);
-			}
-		}
-		else
-		{
-			for (const auto& Triangle : FlatTriangles)
-			{
-				Triangles->AddTriangle(
-					VertexIndices[Triangle[0]],
-					VertexIndices[Triangle[1]],
-					VertexIndices[Triangle[2]],
-					GWhiteTexture,
-					SE_BLEND_Translucent);
-			}
-		}
+		ReleaseRenderComponent();
 	}
 }
 
 void FFramedashEditorHeatmapOverlay::OnBeginPIE(bool)
 {
-	UnregisterDrawDelegate();
+	bPIESuspended = true;
+	if (RenderComponent.Get() != nullptr)
+	{
+		RenderComponent->SetPIESuspended(true);
+	}
 }
 
 void FFramedashEditorHeatmapOverlay::OnEndPIE(bool)
 {
-	if (bEnabled)
+	bPIESuspended = false;
+	EnsureRenderComponentRegistered();
+	if (RenderComponent.Get() != nullptr)
 	{
-		RegisterDrawDelegate();
+		RenderComponent->SetPIESuspended(false);
 	}
 }

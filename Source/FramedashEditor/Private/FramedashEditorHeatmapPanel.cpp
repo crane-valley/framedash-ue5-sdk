@@ -3,11 +3,11 @@
 #include "FramedashEditorHeatmapPanel.h"
 
 #include "FramedashEditorHeatmapOverlay.h"
+#include "FramedashEditorHeatmapLayout.h"
 #include "FramedashEditorHttpClient.h"
 #include "FramedashEditorSettings.h"
 
 #include "Widgets/Input/SButton.h"
-#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SNumericEntryBox.h"
@@ -39,10 +39,10 @@ namespace
 	}
 }
 
-void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
+void SFramedashEditorHeatmapPanel::Construct(const FArguments& Arguments)
 {
 	HttpClient = MakeShared<FFramedashEditorHttpClient>();
-	Overlay = MakeShared<FFramedashEditorHeatmapOverlay>();
+	Overlay = Arguments._Overlay;
 
 	for (const auto& Value : {1, 7, 14, 30})
 	{
@@ -57,6 +57,7 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 	SelectedDays = FindIntegerOption(DaysOptions, Settings != nullptr ? Settings->Days : 7);
 	SelectedCellSize = FindIntegerOption(CellSizeOptions, Settings != nullptr ? Settings->CellSize : 25);
 	EventNameFilter = Settings != nullptr ? Settings->EventNameFilter : FString();
+	ObservedReadApiKey = Settings != nullptr ? Settings->ReadApiKey : FString();
 	ObservedApiBaseUrl = Settings != nullptr ? Settings->ApiBaseUrl : FString();
 	ObservedProjectId = Settings != nullptr ? Settings->ProjectId : FString();
 	ObservedEventNameFilter = EventNameFilter;
@@ -77,7 +78,9 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 			.Padding(12.0f, 12.0f, 12.0f, 6.0f)
 			[
 				SNew(STextBlock)
-				.Text(LOCTEXT("Introduction", "Cloud-aggregated heatmap cells are drawn in UE world coordinates."))
+				.Text(LOCTEXT(
+					"Introduction",
+					"Fetch cloud heatmap data outside PIE, then use Show > Framedash Heatmap in each level viewport."))
 				.AutoWrapText(true)
 			]
 			+ SVerticalBox::Slot()
@@ -110,30 +113,35 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 				+ SGridPanel::Slot(1, 0)
 				.Padding(0.0f, 4.0f)
 				[
-					SAssignNew(MapComboBox, SComboBox<TSharedPtr<FramedashEditor::FMapInfo>>)
-					.OptionsSource(&MapOptions)
-					.OnGenerateWidget(this, &SFramedashEditorHeatmapPanel::GenerateMapWidget)
-					.OnSelectionChanged(this, &SFramedashEditorHeatmapPanel::OnMapSelected)
-					.IsEnabled(this, &SFramedashEditorHeatmapPanel::CanStartRequest)
+					SNew(SBox)
+					.MinDesiredWidth(FramedashEditor::HeatmapMapSelectorMinimumWidth)
 					[
-						SNew(STextBlock).Text(this, &SFramedashEditorHeatmapPanel::GetSelectedMapText)
+						SAssignNew(MapComboBox, SComboBox<TSharedPtr<FramedashEditor::FMapInfo>>)
+						.OptionsSource(&MapOptions)
+						.OnGenerateWidget(this, &SFramedashEditorHeatmapPanel::GenerateMapWidget)
+						.OnSelectionChanged(this, &SFramedashEditorHeatmapPanel::OnMapSelected)
+						.IsEnabled(this, &SFramedashEditorHeatmapPanel::CanStartRequest)
+						[
+							SNew(STextBlock).Text(this, &SFramedashEditorHeatmapPanel::GetSelectedMapText)
+						]
 					]
 				]
-				+ SGridPanel::Slot(2, 0)
-				.Padding(8.0f, 4.0f, 0.0f, 4.0f)
+				+ SGridPanel::Slot(1, 1)
+				.Padding(0.0f, 4.0f)
+				.HAlign(HAlign_Left)
 				[
 					SNew(SButton)
 					.Text(LOCTEXT("RefreshMaps", "Refresh Maps"))
 					.IsEnabled(this, &SFramedashEditorHeatmapPanel::CanStartRequest)
 					.OnClicked(this, &SFramedashEditorHeatmapPanel::RefreshMaps)
 				]
-				+ SGridPanel::Slot(0, 1)
+				+ SGridPanel::Slot(0, 2)
 				.Padding(0.0f, 4.0f, 12.0f, 4.0f)
 				.VAlign(VAlign_Center)
 				[
 					SNew(STextBlock).Text(LOCTEXT("DaysLabel", "Days"))
 				]
-				+ SGridPanel::Slot(1, 1)
+				+ SGridPanel::Slot(1, 2)
 				.Padding(0.0f, 4.0f)
 				[
 					SAssignNew(DaysComboBox, SComboBox<TSharedPtr<int32>>)
@@ -146,13 +154,13 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 						SNew(STextBlock).Text(this, &SFramedashEditorHeatmapPanel::GetSelectedDaysText)
 					]
 				]
-				+ SGridPanel::Slot(0, 2)
+				+ SGridPanel::Slot(0, 3)
 				.Padding(0.0f, 4.0f, 12.0f, 4.0f)
 				.VAlign(VAlign_Center)
 				[
 					SNew(STextBlock).Text(LOCTEXT("CellSizeLabel", "Cell Size"))
 				]
-				+ SGridPanel::Slot(1, 2)
+				+ SGridPanel::Slot(1, 3)
 				.Padding(0.0f, 4.0f)
 				[
 					SAssignNew(CellSizeComboBox, SComboBox<TSharedPtr<int32>>)
@@ -165,14 +173,13 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 						SNew(STextBlock).Text(this, &SFramedashEditorHeatmapPanel::GetSelectedCellSizeText)
 					]
 				]
-				+ SGridPanel::Slot(0, 3)
+				+ SGridPanel::Slot(0, 4)
 				.Padding(0.0f, 4.0f, 12.0f, 4.0f)
 				.VAlign(VAlign_Center)
 				[
 					SNew(STextBlock).Text(LOCTEXT("EventNameLabel", "Event Name"))
 				]
-				+ SGridPanel::Slot(1, 3)
-				.ColumnSpan(2)
+				+ SGridPanel::Slot(1, 4)
 				.Padding(0.0f, 4.0f)
 				[
 					SNew(SEditableTextBox)
@@ -182,7 +189,7 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 					.OnTextChanged(this, &SFramedashEditorHeatmapPanel::OnEventNameChanged)
 					.OnTextCommitted(this, &SFramedashEditorHeatmapPanel::OnEventNameCommitted)
 				]
-				+ SGridPanel::Slot(0, 4)
+				+ SGridPanel::Slot(0, 5)
 				.Padding(0.0f, 4.0f, 12.0f, 4.0f)
 				.VAlign(VAlign_Center)
 				[
@@ -192,8 +199,7 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 						"WorldAlignmentTooltip",
 						"Translate cloud coordinates into this editor world's origin without changing telemetry data."))
 				]
-				+ SGridPanel::Slot(1, 4)
-				.ColumnSpan(2)
+				+ SGridPanel::Slot(1, 5)
 				.Padding(0.0f, 4.0f)
 				[
 					SNew(SHorizontalBox)
@@ -263,17 +269,6 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 					.IsEnabled(this, &SFramedashEditorHeatmapPanel::CanFrameHeatmap)
 					.OnClicked(this, &SFramedashEditorHeatmapPanel::FrameHeatmap)
 				]
-				+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				[
-					SNew(SCheckBox)
-					.IsChecked(this, &SFramedashEditorHeatmapPanel::GetOverlayState)
-					.OnCheckStateChanged(this, &SFramedashEditorHeatmapPanel::OnOverlayStateChanged)
-					[
-						SNew(STextBlock).Text(LOCTEXT("OverlayEnabled", "Overlay Enabled"))
-					]
-				]
 			]
 			+ SVerticalBox::Slot()
 			.AutoHeight()
@@ -290,7 +285,7 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments&)
 		]
 	];
 
-	RefreshMaps();
+	StartRefreshMaps(false);
 }
 
 SFramedashEditorHeatmapPanel::~SFramedashEditorHeatmapPanel()
@@ -304,17 +299,19 @@ SFramedashEditorHeatmapPanel::~SFramedashEditorHeatmapPanel()
 	{
 		HttpClient->Shutdown();
 	}
-	if (Overlay.IsValid())
-	{
-		Overlay->Shutdown();
-	}
 }
 
 FReply SFramedashEditorHeatmapPanel::RefreshMaps()
 {
+	StartRefreshMaps(true);
+	return FReply::Handled();
+}
+
+void SFramedashEditorHeatmapPanel::StartRefreshMaps(bool bClearOverlay)
+{
 	if (!CanStartRequest() || !HttpClient.IsValid())
 	{
-		return FReply::Handled();
+		return;
 	}
 	bBusy = true;
 	StatusText = LOCTEXT("LoadingMaps", "Loading maps...");
@@ -324,7 +321,7 @@ FReply SFramedashEditorHeatmapPanel::RefreshMaps()
 	{
 		MapComboBox->RefreshOptions();
 	}
-	if (Overlay.IsValid())
+	if (bClearOverlay && Overlay.IsValid())
 	{
 		Overlay->ClearData();
 	}
@@ -334,7 +331,7 @@ FReply SFramedashEditorHeatmapPanel::RefreshMaps()
 	{
 		bBusy = false;
 		StatusText = LOCTEXT("SettingsUnavailable", "Framedash editor settings are unavailable.");
-		return FReply::Handled();
+		return;
 	}
 	const uint64 RequestQueryRevision = QueryRevision;
 	const TWeakPtr<SFramedashEditorHeatmapPanel> WeakSelf = SharedThis(this);
@@ -355,7 +352,6 @@ FReply SFramedashEditorHeatmapPanel::RefreshMaps()
 				MoveTemp(Maps),
 				Error);
 		});
-	return FReply::Handled();
 }
 
 FReply SFramedashEditorHeatmapPanel::FetchHeatmap()
@@ -391,12 +387,15 @@ FReply SFramedashEditorHeatmapPanel::FetchHeatmap()
 	const FramedashEditor::FMapInfo Map = *SelectedMap;
 	const double CellSize = static_cast<double>(Settings->CellSize);
 	const uint64 RequestQueryRevision = QueryRevision;
+	const uint64 RequestOverlayRevision = Overlay.IsValid()
+		? Overlay->GetDataRevision()
+		: 0;
 	const TWeakPtr<SFramedashEditorHeatmapPanel> WeakSelf = SharedThis(this);
 	// The route resolves the slug (mapId) before falling back to the row UUID (id),
 	// so a UUID that happens to collide with another map's user-supplied slug would
 	// mis-resolve to the wrong map if the row id were sent here instead.
 	HttpClient->FetchHeatmap(*Settings, Map.MapId,
-		[WeakSelf, Map, CellSize, RequestQueryRevision](
+		[WeakSelf, Map, CellSize, RequestQueryRevision, RequestOverlayRevision](
 			bool bSuccess,
 			TArray<FramedashEditor::FHeatmapCell>&& Cells,
 			const FString& Error)
@@ -411,6 +410,7 @@ FReply SFramedashEditorHeatmapPanel::FetchHeatmap()
 				Map,
 				CellSize,
 				RequestQueryRevision,
+				RequestOverlayRevision,
 				MoveTemp(Cells),
 				Error);
 		});
@@ -419,7 +419,7 @@ FReply SFramedashEditorHeatmapPanel::FetchHeatmap()
 
 bool SFramedashEditorHeatmapPanel::CanFetchHeatmap() const
 {
-	return !bBusy && SelectedMap.IsValid();
+	return CanStartRequest() && SelectedMap.IsValid();
 }
 
 FReply SFramedashEditorHeatmapPanel::FrameHeatmap()
@@ -451,7 +451,8 @@ bool SFramedashEditorHeatmapPanel::CanFrameHeatmap() const
 
 bool SFramedashEditorHeatmapPanel::CanStartRequest() const
 {
-	return !bBusy;
+	return !bBusy &&
+		(GEditor == nullptr || GEditor->PlayWorld == nullptr);
 }
 
 TSharedRef<SWidget> SFramedashEditorHeatmapPanel::GenerateMapWidget(
@@ -681,36 +682,15 @@ void SFramedashEditorHeatmapPanel::OnSettingsObjectPropertyChanged(
 		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, CellSize);
 	const bool bEventNameProperty = bCheckAllQueryProperties ||
 		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, EventNameFilter);
+	const bool bReadApiKeyProperty = bCheckAllQueryProperties ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, ReadApiKey);
 	const bool bApiBaseUrlProperty = bCheckAllQueryProperties ||
 		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, ApiBaseUrl);
 	const bool bProjectIdProperty = bCheckAllQueryProperties ||
 		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, ProjectId);
 
-	// OverlayOpacity/ZOffset affect only how the already-fetched cells are drawn
-	// (FramedashEditorHeatmapOverlay::Draw reads them live from the settings CDO
-	// every call), not the query itself -- so unlike the properties below, this
-	// needs nothing but a redraw kick to show up in a non-realtime viewport. No
-	// overlay-clear/QueryRevision bump: the underlying cell data is still valid.
-	const bool bOverlayOpacityProperty = bCheckAllQueryProperties ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, OverlayOpacity);
-	const bool bZOffsetProperty = bCheckAllQueryProperties ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, ZOffset);
-	const bool bWorldOffsetXProperty = bCheckAllQueryProperties ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, WorldOffsetX);
-	const bool bWorldOffsetYProperty = bCheckAllQueryProperties ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(UFramedashEditorSettings, WorldOffsetY);
-	if ((bWorldOffsetXProperty || bWorldOffsetYProperty) && Overlay.IsValid())
-	{
-		Overlay->SetWorldOffset(FVector2D(Settings->WorldOffsetX, Settings->WorldOffsetY));
-	}
-	if ((bOverlayOpacityProperty || bZOffsetProperty ||
-		bWorldOffsetXProperty || bWorldOffsetYProperty) && GEditor != nullptr)
-	{
-		GEditor->RedrawLevelEditingViewports(false);
-	}
-
 	if (!bDaysProperty && !bCellSizeProperty && !bEventNameProperty &&
-		!bApiBaseUrlProperty && !bProjectIdProperty)
+		!bReadApiKeyProperty && !bApiBaseUrlProperty && !bProjectIdProperty)
 	{
 		return;
 	}
@@ -720,11 +700,14 @@ void SFramedashEditorHeatmapPanel::OnSettingsObjectPropertyChanged(
 		bCellSizeProperty && ObservedCellSize != Settings->CellSize;
 	const bool bEventNameChanged =
 		bEventNameProperty && ObservedEventNameFilter != Settings->EventNameFilter;
+	const bool bReadApiKeyChanged =
+		bReadApiKeyProperty && ObservedReadApiKey != Settings->ReadApiKey;
 	const bool bApiBaseUrlChanged =
 		bApiBaseUrlProperty && ObservedApiBaseUrl != Settings->ApiBaseUrl;
 	const bool bProjectIdChanged =
 		bProjectIdProperty && ObservedProjectId != Settings->ProjectId;
-	const bool bConnectionChanged = bApiBaseUrlChanged || bProjectIdChanged;
+	const bool bConnectionChanged =
+		bReadApiKeyChanged || bApiBaseUrlChanged || bProjectIdChanged;
 	if (!bDaysChanged && !bCellSizeChanged && !bEventNameChanged && !bConnectionChanged)
 	{
 		return;
@@ -769,6 +752,7 @@ void SFramedashEditorHeatmapPanel::OnSettingsObjectPropertyChanged(
 	}
 	if (bConnectionChanged)
 	{
+		ObservedReadApiKey = Settings->ReadApiKey;
 		ObservedApiBaseUrl = Settings->ApiBaseUrl;
 		ObservedProjectId = Settings->ProjectId;
 		SelectedMap.Reset();
@@ -791,20 +775,6 @@ void SFramedashEditorHeatmapPanel::OnSettingsObjectPropertyChanged(
 		: LOCTEXT(
 			"QuerySettingsChangedExternally",
 			"Query settings changed in Project Settings. Fetch heatmap data for the new selection.");
-}
-
-ECheckBoxState SFramedashEditorHeatmapPanel::GetOverlayState() const
-{
-	return bOverlayEnabled ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-}
-
-void SFramedashEditorHeatmapPanel::OnOverlayStateChanged(ECheckBoxState State)
-{
-	bOverlayEnabled = State == ECheckBoxState::Checked;
-	if (Overlay.IsValid())
-	{
-		Overlay->SetEnabled(bOverlayEnabled);
-	}
 }
 
 void SFramedashEditorHeatmapPanel::HandleMapsResponse(
@@ -857,15 +827,18 @@ void SFramedashEditorHeatmapPanel::HandleHeatmapResponse(
 	const FramedashEditor::FMapInfo& Map,
 	double CellSize,
 	uint64 RequestQueryRevision,
+	uint64 RequestOverlayRevision,
 	TArray<FramedashEditor::FHeatmapCell>&& Cells,
 	const FString& Error)
 {
 	bBusy = false;
-	if (RequestQueryRevision != QueryRevision)
+	if (RequestQueryRevision != QueryRevision ||
+		!Overlay.IsValid() ||
+		!Overlay->IsDataRevisionCurrent(RequestOverlayRevision))
 	{
 		StatusText = LOCTEXT(
 			"HeatmapResponseStale",
-			"Query settings changed while fetching. Fetch heatmap data for the new selection.");
+			"The level or query settings changed while fetching. Fetch heatmap data again.");
 		return;
 	}
 	if (!bSuccess)
@@ -886,13 +859,17 @@ void SFramedashEditorHeatmapPanel::HandleHeatmapResponse(
 	if (CellCount == 10000)
 	{
 		StatusText = FText::Format(
-			LOCTEXT("CellsLoadedTruncated", "Loaded {0} cells. Results may be truncated at the API limit of 10,000 cells."),
+			LOCTEXT(
+				"CellsLoadedTruncated",
+				"Loaded {0} cells. Results may be truncated at the API limit of 10,000 cells. Use Show > Framedash Heatmap in a level viewport."),
 			FText::AsNumber(CellCount));
 	}
 	else
 	{
 		StatusText = FText::Format(
-			LOCTEXT("CellsLoaded", "Loaded {0} heatmap cell(s)."),
+			LOCTEXT(
+				"CellsLoaded",
+				"Loaded {0} heatmap cell(s). Use Show > Framedash Heatmap in a level viewport."),
 			FText::AsNumber(CellCount));
 	}
 }

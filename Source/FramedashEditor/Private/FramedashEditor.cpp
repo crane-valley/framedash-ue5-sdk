@@ -2,6 +2,7 @@
 
 #include "FramedashEditor.h"
 
+#include "FramedashEditorHeatmapOverlay.h"
 #include "FramedashEditorHeatmapPanel.h"
 
 #include "Brushes/SlateImageBrush.h"
@@ -57,6 +58,7 @@ namespace
 void FFramedashEditorModule::StartupModule()
 {
 	RegisterEditorStyle();
+	HeatmapOverlay = MakeShared<FFramedashEditorHeatmapOverlay>();
 	const FSlateIcon HeatmapIcon(EditorStyleName, HeatmapIconName);
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
 		HeatmapTabName,
@@ -83,6 +85,11 @@ void FFramedashEditorModule::ShutdownModule()
 	UToolMenus::UnRegisterStartupCallback(this);
 	UToolMenus::UnregisterOwner(this);
 	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(HeatmapTabName);
+	if (HeatmapOverlay.IsValid())
+	{
+		HeatmapOverlay->Shutdown();
+		HeatmapOverlay.Reset();
+	}
 	UnregisterEditorStyle();
 	UE_LOG(LogFramedashEditor, Log, TEXT("Framedash editor module unloaded"));
 }
@@ -93,6 +100,7 @@ TSharedRef<SDockTab> FFramedashEditorModule::SpawnHeatmapTab(const FSpawnTabArgs
 		.TabRole(ETabRole::NomadTab)
 		[
 			SNew(SFramedashEditorHeatmapPanel)
+			.Overlay(HeatmapOverlay)
 		];
 }
 
@@ -104,9 +112,25 @@ void FFramedashEditorModule::RegisterMenus()
 	{
 		return;
 	}
-	FToolMenuSection& Section = WindowMenu->FindOrAddSection(TEXT("Framedash"));
-	Section.Label = LOCTEXT("FramedashSectionLabel", "Framedash");
-	Section.InsertPosition = FToolMenuInsert(TEXT("GetContent"), EToolMenuInsertType::Before);
+	UToolMenu* FramedashMenu = WindowMenu->AddSubMenu(
+		FToolMenuOwner(this),
+		TEXT("GetContent"),
+		TEXT("Framedash"),
+		LOCTEXT("FramedashMenuLabel", "Framedash"),
+		LOCTEXT("FramedashMenuTooltip", "Open Framedash editor tools."));
+	if (FramedashMenu == nullptr)
+	{
+		return;
+	}
+	if (FToolMenuSection* ParentSection = WindowMenu->FindSection(TEXT("GetContent")))
+	{
+		if (FToolMenuEntry* ParentEntry = ParentSection->FindEntry(TEXT("Framedash")))
+		{
+			ParentEntry->Icon = FSlateIcon(EditorStyleName, HeatmapIconName);
+		}
+	}
+
+	FToolMenuSection& Section = FramedashMenu->FindOrAddSection(NAME_None);
 	Section.AddMenuEntry(
 		TEXT("OpenFramedashHeatmap"),
 		LOCTEXT("OpenHeatmapLabel", "Framedash Heatmap"),

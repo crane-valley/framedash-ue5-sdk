@@ -6,6 +6,27 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-07-24
+
+### Added
+
+- The cloud heatmap is now a per-level-viewport **Show > Framedash Heatmap**
+  flag that starts disabled and remains independent across viewport layouts.
+- Standard F9 and high-resolution viewport screenshots now include the heatmap
+  through the editor scene's main render pass.
+
+### Changed
+
+- The Window entry is now a single **Window > Framedash > Framedash Heatmap**
+  command.
+- Cloud fetch controls remain in the data panel while the editor module owns
+  the visualization, so closing the panel no longer removes an active heatmap.
+- Play In Editor suspends the visualization and restores the prior viewport
+  choices when play ends.
+- The map selector and refresh action now remain usable in narrow docks.
+- Cloud voxels are batched by color and drawn cool-to-hot so high-load cells
+  stay visually prominent without per-cell collision traces.
+
 ## [0.1.12] - 2026-07-24
 
 ### Changed

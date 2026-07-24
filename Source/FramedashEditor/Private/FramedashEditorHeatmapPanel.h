@@ -18,6 +18,7 @@ class SFramedashEditorHeatmapPanel : public SCompoundWidget
 {
 public:
 	SLATE_BEGIN_ARGS(SFramedashEditorHeatmapPanel) {}
+		SLATE_ARGUMENT(TSharedPtr<FFramedashEditorHeatmapOverlay>, Overlay)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& Arguments);
@@ -25,6 +26,7 @@ public:
 
 private:
 	FReply RefreshMaps();
+	void StartRefreshMaps(bool bClearOverlay);
 	FReply FetchHeatmap();
 	FReply FrameHeatmap();
 	bool CanFetchHeatmap() const;
@@ -57,9 +59,6 @@ private:
 	void OnWorldOffsetYSliderEnded(double Value);
 	void ApplyWorldOffsetAndSave();
 	void OnSettingsObjectPropertyChanged(UObject* Object, FPropertyChangedEvent& PropertyChangedEvent);
-	ECheckBoxState GetOverlayState() const;
-	void OnOverlayStateChanged(ECheckBoxState State);
-
 	void HandleMapsResponse(
 		bool bSuccess,
 		uint64 RequestQueryRevision,
@@ -70,6 +69,7 @@ private:
 		const FramedashEditor::FMapInfo& Map,
 		double CellSize,
 		uint64 RequestQueryRevision,
+		uint64 RequestOverlayRevision,
 		TArray<FramedashEditor::FHeatmapCell>&& Cells,
 		const FString& Error);
 	void SaveSettings();
@@ -88,6 +88,7 @@ private:
 	TSharedPtr<int32> SelectedDays;
 	TSharedPtr<int32> SelectedCellSize;
 	FString EventNameFilter;
+	FString ObservedReadApiKey;
 	FString ObservedApiBaseUrl;
 	FString ObservedProjectId;
 	FString ObservedEventNameFilter;
@@ -97,5 +98,4 @@ private:
 	int32 ObservedDays = 7;
 	int32 ObservedCellSize = 25;
 	bool bBusy = false;
-	bool bOverlayEnabled = false;
 };
