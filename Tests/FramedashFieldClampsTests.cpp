@@ -31,9 +31,8 @@ const double kQuietNaN = std::numeric_limits<double>::quiet_NaN();
 const double kPosInf = std::numeric_limits<double>::infinity();
 const float kQuietNaNf = std::numeric_limits<float>::quiet_NaN();
 const float kPosInff = std::numeric_limits<float>::infinity();
-} // namespace
+}
 
-// -- SanitizeCoord -----------------------------------------------------------
 
 TEST(SanitizeCoord, NaN_ReturnsZero)
 {
@@ -77,7 +76,6 @@ TEST(SanitizeCoord, NormalValue_PassesThrough)
 	EXPECT_DOUBLE_EQ(SanitizeCoord(0.0), 0.0);
 }
 
-// -- ClampTimingMs -----------------------------------------------------------
 
 TEST(ClampTimingMs, NaN_ReturnsZero)
 {
@@ -111,7 +109,6 @@ TEST(ClampTimingMs, NormalValue_PassesThrough)
 	EXPECT_FLOAT_EQ(ClampTimingMs(0.0f), 0.0f);
 }
 
-// -- ClampFps ----------------------------------------------------------------
 
 TEST(ClampFps, NaN_ReturnsZero)
 {
@@ -144,7 +141,6 @@ TEST(ClampFps, NormalValue_PassesThrough)
 	EXPECT_FLOAT_EQ(ClampFps(0.0f), 0.0f);
 }
 
-// -- FpsFromFrameTimeMs ------------------------------------------------------
 
 TEST(FpsFromFrameTimeMs, ZeroFrameTime_ReturnsZero)
 {
@@ -163,19 +159,15 @@ TEST(FpsFromFrameTimeMs, NaNFrameTime_ReturnsZero)
 
 TEST(FpsFromFrameTimeMs, SubMillisecondFrame_CapsAt1000)
 {
-	// 0.5ms frame -> 2000 fps uncapped -> capped to 1000.
 	EXPECT_FLOAT_EQ(FpsFromFrameTimeMs(0.5f), kFpsMax);
 }
 
 TEST(FpsFromFrameTimeMs, NormalFrame_ComputesFps)
 {
-	// 16.666... ms -> ~60 fps.
 	EXPECT_NEAR(FpsFromFrameTimeMs(1000.0f / 60.0f), 60.0f, 1e-3f);
-	// 10ms -> 100 fps.
 	EXPECT_FLOAT_EQ(FpsFromFrameTimeMs(10.0f), 100.0f);
 }
 
-// -- ClampMemoryBytes --------------------------------------------------------
 
 TEST(ClampMemoryBytes, Negative_ReturnsZero)
 {
@@ -191,7 +183,6 @@ TEST(ClampMemoryBytes, Zero_PassesThrough)
 TEST(ClampMemoryBytes, Positive_PassesThrough)
 {
 	EXPECT_EQ(ClampMemoryBytes(1024), 1024);
-	// A reading just under the cap is unchanged.
 	EXPECT_EQ(ClampMemoryBytes(kMemMax - 1), kMemMax - 1);
 }
 

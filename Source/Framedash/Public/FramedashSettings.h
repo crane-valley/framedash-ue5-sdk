@@ -74,6 +74,5 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Capture", meta=(DisplayName="Track Memory Detail"))
 	bool bTrackMemoryDetail;
 
-	/** Category path in Project Settings. */
 	virtual FName GetCategoryName() const override { return FName(TEXT("Plugins")); }
 };

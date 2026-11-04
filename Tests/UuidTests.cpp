@@ -26,9 +26,8 @@ uint64_t Reconstruct48BitTimestamp(const FUuidFields& U)
 	return (static_cast<uint64_t>(U.A) << 16) | static_cast<uint64_t>(U.B >> 16);
 }
 
-} // namespace
+}
 
-// -- Bit layout --------------------------------------------------------
 
 TEST(UuidV7, VersionNibbleIsSeven)
 {
@@ -51,7 +50,6 @@ TEST(UuidV7, VersionAndVariantHoldForArbitraryRandomInputs)
 	EXPECT_EQ(U.C & kVariantMaskInC, kVariant10InC);
 }
 
-// -- Timestamp ---------------------------------------------------------
 
 TEST(UuidV7, TimestampZeroProducesAllZeroPrefix)
 {
@@ -89,18 +87,15 @@ TEST(UuidV7, EarlierTimestampSortsBeforeLater)
 	EXPECT_LT(Reconstruct48BitTimestamp(Earlier), Reconstruct48BitTimestamp(Later));
 }
 
-// -- Random material placement -----------------------------------------
 
 TEST(UuidV7, RandAComesFromR1Low12Bits)
 {
-	// R1 = 0xABC -> rand_a = 0xABC. R2 = 0 keeps rand_b deterministic.
 	const FUuidFields U = PackUuidV7(0, 0xABCULL, 0);
 	EXPECT_EQ(U.B & 0x0FFFu, 0xABCu);
 }
 
 TEST(UuidV7, RandBHiComesFromR1Bits12Through25)
 {
-	// 14 bits at offset 12: 0x3FFF << 12 = 0x3FFF000.
 	const FUuidFields U = PackUuidV7(0, 0x3FFF000ULL, 0);
 	EXPECT_EQ((U.C >> 16) & 0x3FFFu, 0x3FFFu);
 	EXPECT_EQ(U.B & 0x0FFFu, 0u);
@@ -108,7 +103,6 @@ TEST(UuidV7, RandBHiComesFromR1Bits12Through25)
 
 TEST(UuidV7, RandBMdComesFromR2Bits32Through47)
 {
-	// R2 = 0xCAFE_0000_0000_0000 places 0xCAFE at bits 32..47.
 	const FUuidFields U = PackUuidV7(0, 0, 0xCAFE00000000ULL);
 	EXPECT_EQ(U.C & 0xFFFFu, 0xCAFEu);
 }
@@ -128,7 +122,6 @@ TEST(UuidV7, RandomFieldsIndependentOfTimestamp)
 	EXPECT_EQ(A.D, B.D);
 }
 
-// -- Xoshiro256pp ------------------------------------------------------
 
 TEST(Xoshiro256pp, DefaultConstructedZeroSeedYieldsZeroStream)
 {
@@ -184,10 +177,8 @@ TEST(Xoshiro256pp, DifferentSeedsProduceDifferentSequences)
 	EXPECT_TRUE(bAnyDifferent);
 }
 
-// Known-answer vector: lock the algorithm against accidental rotation /
-// XOR-cascade reorderings. The expected first value is hand-derived from
-// the canonical Blackman/Vigna reference for seed (1, 2, 3, 4):
-//   result = rotl(s0 + s3, 23) + s0 = rotl(5, 23) + 1 = 0x2800000 + 1.
+// The known-answer value comes from the canonical Blackman/Vigna reference for seed (1, 2, 3,
+// 4), independently pinning rotation and XOR ordering.
 TEST(Xoshiro256pp, KnownAnswerVectorForSeed_1_2_3_4)
 {
 	FXoshiro256pp Rng;

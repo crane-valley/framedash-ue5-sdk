@@ -33,11 +33,8 @@ namespace
 	std::atomic<int32> GEnableRefCount{0};
 
 	/**
-	 * A transparent IFileHandle that meters IFileHandle::Read into the global IO
-	 * stats accumulator, delegating every operation to the wrapped lower handle.
-	 * Owns the lower handle (the wrapper hands ownership over on OpenRead).
-	 * Counting is gated by a pointer to the owning platform file's atomic flag,
-	 * which is valid for the process lifetime (the wrapper is never freed).
+	 * The metering flag belongs to a platform-file wrapper that lives for the process lifetime, so
+	 * its pointer outlives every wrapped file handle.
 	 */
 	class FFramedashIoTrackingFileHandle final : public IFileHandle
 	{
@@ -63,10 +60,9 @@ namespace
 
 		virtual bool Read(uint8* Destination, int64 BytesToRead) override
 		{
-			// Count only when enabled and the read succeeds. Time the delegated
-			// call with the monotonic platform clock; on a non-monotonic clock a
-			// backwards delta is clamped to 0 so a garbage timing can never emit a
-			// negative/non-finite metric (the accumulator also drops those).
+			// Time the delegated call with the monotonic platform clock; on a non-monotonic clock a
+			// backwards delta is clamped to 0 so a garbage timing can never emit a negative/non-finite
+			// metric (the accumulator also drops those).
 			if (!EnabledFlag->load(std::memory_order_relaxed))
 			{
 				return Lower->Read(Destination, BytesToRead);
@@ -86,9 +82,8 @@ namespace
 		}
 
 #if !UE_VERSION_OLDER_THAN(5, 5, 0)
-		// ReadAt (positional pread-style read) was added to IFileHandle in UE 5.5.
-		// Delegate only -- like the async/mapped paths it stays unmetered; the
-		// metered surface is the sequential OpenRead Read path (documented gap).
+		// ReadAt exists only from UE 5.5 onward. It stays unmetered with the async and mapped paths;
+		// the declared coverage is sequential OpenRead/Read.
 		virtual bool ReadAt(uint8* Destination, int64 BytesToRead, int64 Offset) override
 		{
 			return Lower->ReadAt(Destination, BytesToRead, Offset);
@@ -99,12 +94,10 @@ namespace
 		IFileHandle* Lower;
 		const std::atomic<bool>* EnabledFlag;
 	};
-} // namespace
+}
 
 void FFramedashIoTrackingPlatformFile::Install()
 {
-	// One more subsystem wants metering. Balanced by exactly one Disable() in that
-	// subsystem's Deinitialize (it tracks whether it installed).
 	GEnableRefCount.fetch_add(1, std::memory_order_relaxed);
 
 	// Already installed (e.g. a second GameInstance, or a Shutdown()+re-init
@@ -160,14 +153,14 @@ void FFramedashIoTrackingPlatformFile::Disable()
 	}
 }
 
-bool FFramedashIoTrackingPlatformFile::ShouldBeUsed(IPlatformFile* /*Inner*/, const TCHAR* /*CmdLine*/) const
+bool FFramedashIoTrackingPlatformFile::ShouldBeUsed(IPlatformFile*  , const TCHAR*  ) const
 {
 	// Installed explicitly by the subsystem (not via the -FileWrapper command
 	// line), so this predicate is not consulted for auto-insertion.
 	return false;
 }
 
-bool FFramedashIoTrackingPlatformFile::Initialize(IPlatformFile* Inner, const TCHAR* /*CmdLine*/)
+bool FFramedashIoTrackingPlatformFile::Initialize(IPlatformFile* Inner, const TCHAR*  )
 {
 	if (Inner == nullptr)
 	{
@@ -184,12 +177,10 @@ IFileHandle* FFramedashIoTrackingPlatformFile::OpenRead(const TCHAR* Filename, b
 	{
 		return nullptr;
 	}
-	// Return the lower handle UNWRAPPED (no metering, no wrapper allocation) when
-	// either counting is disabled, or the current thread is inside an SDK-internal
-	// read scope. The latter excludes the SDK's own offline-queue persistence reads
+	// The latter excludes the SDK's own offline-queue persistence reads
 	// (FFramedashPersistenceProvider brackets its synchronous FFileHelper read with
-	// FIoMeteringSuppressionScope) so telemetry recovery is not reported as game
-	// disk-IO. Re-enabling later meters only handles opened after.
+	// FIoMeteringSuppressionScope) so telemetry recovery is not reported as game disk-IO.
+	// Re-enabling later meters only handles opened after.
 	if (!bEnabled.load(std::memory_order_relaxed) || Framedash::IsThreadReadSuppressed())
 	{
 		return Handle;

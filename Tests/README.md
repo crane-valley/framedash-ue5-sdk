@@ -72,6 +72,11 @@ generator (Release config). The same workflow also runs a RunUAT
 and an `automation-spec` job that runs the in-engine Automation Specs (below)
 headless on UE 5.6.
 
+`scripts/package-ue5-plugin.ps1` runs this harness again as a release gate,
+before it stages or zips anything: packaging builds an operator's working tree,
+which CI has not necessarily seen. It fails closed -- a host that cannot
+configure, build, or pass the harness cannot produce a release zip.
+
 ## In-engine Automation Specs
 
 Runtime behavior that needs a live engine (`FString`/`TArray`, the HTTP module,
@@ -91,6 +96,13 @@ otherwise carry them): their setup destructively clears the project's
   restores persisted events on initialize without duplicating them on shutdown.
 - `FramedashEventBufferSpec` -- a full ring preserves an unacknowledged durable
   prefix by rejecting the incoming event instead of overwriting the oldest slot.
+- `FramedashSamplingPolicySpec` -- the `FFramedashSamplingPolicy`
+  `ShouldSample`/`SetEventRate`/`RemoveEventRate` contract: unit-interval clamping
+  of the global and per-event rates, per-event overrides taking precedence over the
+  global rate, override removal restoring it, and an empty event name falling back
+  to the global rate. Ported from `sdks/unity/Tests/SamplingPolicyTests.cs`, minus
+  its statistical partial-rate check (the in-between rates draw from
+  `FMath::FRand()`, so only deterministic behavior is pinned).
 
 The `automation-spec` CI job assembles a throwaway host project, copies the plugin
 in, builds the host editor modules with UBT (the editor does not auto-compile a
@@ -114,4 +126,9 @@ then build the host editor modules and run `UnrealEditor-Cmd` as above.
 
 The contract is: anything in `Source/Framedash/Private/Framedash*Policy.{h,cpp}`,
 `FramedashProtobufSerializer.{h,cpp}`, and `FramedashUuid.{h,cpp}` must stay
-engine-independent so this harness can keep growing.
+engine-independent so this harness can keep growing -- with one recorded
+exception: `FramedashSamplingPolicy.{h,cpp}` is UE-type-coupled by design
+(`FString` in its public API, a `TMap` guarded by an `FCriticalSection`) and is
+therefore covered in-engine by `FramedashSamplingPolicySpec`, not here. It must
+not be extracted to pure C++ to fit this harness; that is a settled guardrail.
+Any new `Framedash*Policy` file is still expected to be engine-independent.

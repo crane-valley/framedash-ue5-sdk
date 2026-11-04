@@ -11,7 +11,6 @@
 #endif
 
 /* Enum definitions */
-/* Source of the telemetry event. */
 typedef enum _framedash_v1_TelemetrySource {
     framedash_v1_TelemetrySource_TELEMETRY_SOURCE_UNSPECIFIED = 0,
     framedash_v1_TelemetrySource_TELEMETRY_SOURCE_PLAYER = 1,
@@ -19,21 +18,16 @@ typedef enum _framedash_v1_TelemetrySource {
 } framedash_v1_TelemetrySource;
 
 /* Struct definitions */
-/* 3D position vector for spatial analytics (heatmaps, player tracking). */
 typedef struct _framedash_v1_Vector3 {
     float x;
     float y;
     float z;
 } framedash_v1_Vector3;
 
-/* Core telemetry event emitted by game SDKs.
- Each event maps to a single row in the ClickHouse `framedash.events` table. */
 typedef struct _framedash_v1_GameTelemetryEvent {
     pb_callback_t event_name;
-    /* Unix epoch in microseconds. Stored as DateTime64(6) in ClickHouse. */
     int64_t timestamp_us;
     pb_callback_t session_id;
-    /* Explicit player identifier — the only PII the SDK may collect. */
     pb_callback_t player_id;
     bool has_position;
     framedash_v1_Vector3 position;
@@ -42,29 +36,18 @@ typedef struct _framedash_v1_GameTelemetryEvent {
     float frame_time_ms;
     int64_t memory_used_bytes;
     float gpu_time_ms;
-    /* Free-form string key-value pairs for game-specific context. */
     pb_callback_t attributes;
-    /* Free-form numeric metrics for game-specific measurements. */
     pb_callback_t metrics;
-    /* Source of the telemetry event. */
     framedash_v1_TelemetrySource source;
     pb_callback_t build_id;
     pb_callback_t platform;
     pb_callback_t engine_version;
-    /* Camera orientation in degrees.
- camera_yaw: horizontal rotation (0 = North, clockwise, [0, 360)).
- camera_pitch: vertical rotation (-90 = straight down, +90 = straight up).
- 'optional' enables has-field presence tracking — distinguishes
- "not sent by SDK" (absent) from "facing North at level" (0, 0). */
+    /* Optional presence distinguishes an absent measurement from facing North at level (0, 0). */
     bool has_camera_yaw;
     float camera_yaw;
     bool has_camera_pitch;
     float camera_pitch;
-    /* CPU game thread time in milliseconds (logic, AI, physics).
- 0 = not collected (old SDK or unavailable). */
     float game_thread_ms;
-    /* CPU render thread time in milliseconds (draw commands, culling).
- 0 = not collected (old SDK or unavailable). */
     float render_thread_ms;
 } framedash_v1_GameTelemetryEvent;
 
@@ -78,9 +61,6 @@ typedef struct _framedash_v1_GameTelemetryEvent_MetricsEntry {
     double value;
 } framedash_v1_GameTelemetryEvent_MetricsEntry;
 
-/* Batch wrapper sent by SDKs via POST /v1/events.
- api_key and sdk_version are transmitted in HTTP headers (X-API-Key, X-SDK-Version),
- not in the Protobuf payload. */
 typedef struct _framedash_v1_TelemetryBatch {
     pb_callback_t events;
 } framedash_v1_TelemetryBatch;

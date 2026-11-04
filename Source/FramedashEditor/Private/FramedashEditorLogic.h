@@ -51,6 +51,12 @@ namespace FramedashEditor
 	bool ParseMapsResponse(const FString& Json, TArray<FMapInfo>& OutMaps, FString& OutError);
 	bool ParseHeatmapResponse(const FString& Json, TArray<FHeatmapCell>& OutCells, FString& OutError);
 	FString ParseProblemMessage(const FString& Json, const FString& Fallback);
+	bool ValidateHttpResponse(
+		bool bConnected,
+		int32 StatusCode,
+		const FString& Body,
+		const FString& RequestError,
+		FString& OutError);
 
 	FCellRect BuildCellRect(
 		const FHeatmapCell& Cell,

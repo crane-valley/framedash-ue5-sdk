@@ -17,7 +17,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogFramedashQuickstart, Log, All);
 
 AFramedashQuickstartActor::AFramedashQuickstartActor()
 {
-	// The quickstart sends a single event on BeginPlay; no per-frame work is needed.
 	PrimaryActorTick.bCanEverTick = false;
 }
 

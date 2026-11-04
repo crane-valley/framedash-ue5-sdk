@@ -24,12 +24,6 @@ namespace
 		return CellSize == 5 || CellSize == 10 || CellSize == 25 || CellSize == 50;
 	}
 
-	FString HttpFallback(int32 StatusCode)
-	{
-		return StatusCode > 0
-			? FString::Printf(TEXT("Framedash request failed (HTTP %d)."), StatusCode)
-			: FString(TEXT("Framedash request failed."));
-	}
 }
 
 FFramedashEditorHttpClient::~FFramedashEditorHttpClient()
@@ -62,16 +56,15 @@ void FFramedashEditorHttpClient::FetchMaps(
 			FString&& Body,
 			const FString& RequestError) mutable
 		{
-			if (!bConnected)
+			FString ResponseError;
+			if (!FramedashEditor::ValidateHttpResponse(
+				bConnected,
+				StatusCode,
+				Body,
+				RequestError,
+				ResponseError))
 			{
-				Callback(false, {}, RequestError.IsEmpty()
-					? FString(TEXT("Unable to reach the Framedash API."))
-					: RequestError);
-				return;
-			}
-			if (StatusCode != 200)
-			{
-				Callback(false, {}, FramedashEditor::ParseProblemMessage(Body, HttpFallback(StatusCode)));
+				Callback(false, {}, ResponseError);
 				return;
 			}
 
@@ -135,16 +128,15 @@ void FFramedashEditorHttpClient::FetchHeatmap(
 			FString&& Body,
 			const FString& RequestError) mutable
 		{
-			if (!bConnected)
+			FString ResponseError;
+			if (!FramedashEditor::ValidateHttpResponse(
+				bConnected,
+				StatusCode,
+				Body,
+				RequestError,
+				ResponseError))
 			{
-				Callback(false, {}, RequestError.IsEmpty()
-					? FString(TEXT("Unable to reach the Framedash API."))
-					: RequestError);
-				return;
-			}
-			if (StatusCode != 200)
-			{
-				Callback(false, {}, FramedashEditor::ParseProblemMessage(Body, HttpFallback(StatusCode)));
+				Callback(false, {}, ResponseError);
 				return;
 			}
 

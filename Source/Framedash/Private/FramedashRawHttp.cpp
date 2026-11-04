@@ -6,8 +6,6 @@ namespace Framedash
 {
 namespace
 {
-	// Shared control-stripping core. bRejectSpace additionally strips SP
-	// (request-target rule); header values keep SP (0x20) legal.
 	std::string StripControls(std::string_view Value, bool bRejectSpace)
 	{
 		std::string Out;
@@ -64,7 +62,7 @@ std::string BuildPostHead(
 
 std::string SanitizeRequestTarget(std::string_view RequestTarget)
 {
-	std::string Clean = StripControls(RequestTarget, /*bRejectSpace*/ true);
+	std::string Clean = StripControls(RequestTarget,   true);
 	if (Clean.empty())
 	{
 		return "/";
@@ -78,7 +76,7 @@ std::string SanitizeRequestTarget(std::string_view RequestTarget)
 
 std::string SanitizeHeaderValue(std::string_view Value)
 {
-	return StripControls(Value, /*bRejectSpace*/ false);
+	return StripControls(Value,   false);
 }
 
 bool TryParseStatusCode(const char* Buffer, std::size_t Count, int& OutStatusCode)

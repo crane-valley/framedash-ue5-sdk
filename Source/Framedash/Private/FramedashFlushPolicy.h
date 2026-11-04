@@ -28,17 +28,10 @@ public:
 	float GetFlushIntervalSeconds() const { return FlushIntervalSeconds; }
 	int GetBytesPerEventEstimate() const { return BytesPerEventEstimate; }
 
-	// Estimated payload size in bytes for the given event count.
 	int EstimatePayloadBytes(int EventCount) const;
 
-	// True when the buffer-side trigger fires after Track(): event count
-	// reaches the batch limit or the running estimated payload reaches
-	// the byte limit. Negative inputs are treated as zero.
 	bool ShouldRequestFlush(int EventCount, int EstimatedBytes) const;
 
-	// True when the periodic tick should call Flush(): either an explicit
-	// flush request is pending or the configured interval has elapsed.
-	// Negative ElapsedSeconds is treated as zero.
 	bool ShouldFlush(bool bFlushRequested, float ElapsedSeconds) const;
 
 private:
@@ -48,4 +41,4 @@ private:
 	int BytesPerEventEstimate;
 };
 
-} // namespace Framedash
+}

@@ -2,10 +2,7 @@
 
 #include "FramedashProtobufSerializer.h"
 
-#include <algorithm>
 #include <cmath>
-#include <cstring>
-#include <limits>
 
 extern "C"
 {
@@ -209,14 +206,7 @@ bool EncodeEventsCb(pb_ostream_t* Stream, const pb_field_t* Field, void* const* 
 	return true;
 }
 
-bool ShouldRetryWithLargerBuffer(const pb_ostream_t& Stream)
-{
-	const char* Error = PB_GET_ERROR(&Stream);
-	return (Error && std::strcmp(Error, "stream full") == 0)
-		|| Stream.bytes_written == Stream.max_size;
 }
-
-} // anonymous namespace
 
 namespace Framedash
 {
@@ -225,47 +215,40 @@ bool SerializeTelemetryBatch(
 	const std::vector<FTelemetryEvent>& Events,
 	std::vector<uint8_t>& OutBytes)
 {
-	constexpr size_t MaxRetries = 3;
-	if (Events.size() > std::numeric_limits<size_t>::max() / 1024)
+	framedash_v1_TelemetryBatch Batch = framedash_v1_TelemetryBatch_init_zero;
+	FEventsEncodeContext EventsCtx{&Events};
+	Batch.events.funcs.encode = &EncodeEventsCb;
+	Batch.events.arg = &EventsCtx;
+
+	// The sizing stream runs the same immutable callbacks without writing output.
+	// Exact allocation avoids a heuristic ceiling for legal UTF-8 payloads and keeps
+	// every bounded blocking chunk to at most one sizing pass plus one encode pass.
+	size_t EncodedSize = 0;
+	if (!pb_get_encoded_size(
+		&EncodedSize,
+		framedash_v1_TelemetryBatch_fields,
+		&Batch))
 	{
 		OutBytes.clear();
 		return false;
 	}
 
-	size_t BufferSize = std::max<size_t>(Events.size() * 1024, 4096);
-
-	for (size_t Attempt = 0; Attempt < MaxRetries; ++Attempt)
+	if (EncodedSize == 0)
 	{
-		OutBytes.resize(BufferSize);
-
-		pb_ostream_t Stream = pb_ostream_from_buffer(OutBytes.data(), OutBytes.size());
-
-		framedash_v1_TelemetryBatch Batch = framedash_v1_TelemetryBatch_init_zero;
-		FEventsEncodeContext EventsCtx{&Events};
-		Batch.events.funcs.encode = &EncodeEventsCb;
-		Batch.events.arg = &EventsCtx;
-
-		if (pb_encode(&Stream, framedash_v1_TelemetryBatch_fields, &Batch))
-		{
-			OutBytes.resize(Stream.bytes_written);
-			return true;
-		}
-
-		if (!ShouldRetryWithLargerBuffer(Stream))
-		{
-			break;
-		}
-
-		if (BufferSize > std::numeric_limits<size_t>::max() / 2)
-		{
-			break;
-		}
-
-		BufferSize *= 2;
+		OutBytes.clear();
+		return true;
 	}
 
-	OutBytes.clear();
-	return false;
+	OutBytes.resize(EncodedSize);
+	pb_ostream_t Stream = pb_ostream_from_buffer(OutBytes.data(), OutBytes.size());
+	if (!pb_encode(&Stream, framedash_v1_TelemetryBatch_fields, &Batch))
+	{
+		OutBytes.clear();
+		return false;
+	}
+
+	OutBytes.resize(Stream.bytes_written);
+	return true;
 }
 
-} // namespace Framedash
+}

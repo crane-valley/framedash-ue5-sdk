@@ -112,4 +112,4 @@ void FFramedashSessionManagerSpec::Define()
 	});
 }
 
-#endif // WITH_DEV_AUTOMATION_TESTS && FRAMEDASH_WITH_AUTOMATION_SPECS
+#endif

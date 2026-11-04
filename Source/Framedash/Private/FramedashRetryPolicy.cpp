@@ -12,7 +12,7 @@ namespace
 
 constexpr float MaxRetryDelaySeconds = 60.0f;
 
-} // anonymous namespace
+}
 
 FRetryPolicy::FRetryPolicy(int InMaxRetries, float InBaseDelaySeconds)
 	: MaxRetries(InMaxRetries >= 0 ? InMaxRetries : 5)
@@ -71,12 +71,10 @@ ERetryAction FRetryPolicy::Classify(int HttpStatusCode, int Attempt, int EventCo
 	if (HttpStatusCode >= 300 && HttpStatusCode < 400)
 		return ERetryAction::Fail;
 
-	// Everything else (5xx, 429, network errors with status 0, 1xx)
-	// retries until the attempt budget is exhausted.
 	if (Attempt >= MaxRetries)
 		return ERetryAction::Fail;
 
 	return ERetryAction::Retry;
 }
 
-} // namespace Framedash
+}

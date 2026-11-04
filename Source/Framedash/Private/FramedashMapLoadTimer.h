@@ -24,14 +24,9 @@
 
 namespace Framedash
 {
-	// The auto event name and metrics-map key are shared with the Unity/Godot SDKs:
-	// the load time rides the existing metrics map (proto field 13) as
-	// "load_time_ms" on a "map_load" event, with the loaded map name carried as
-	// attributes["map_name"] and map_id left EMPTY (keeps the event out of the
-	// spatial heatmap grid query and the activation gate, which key on map_id)
-	// -- no proto/nanopb/ClickHouse change (mirrors the io.* attributes-map guardrail).
-	// (The literals are used at the subsystem call site as UE FString/TEXT; kept here
-	// as documentation of the cross-SDK contract this timer feeds.)
+	// The map_load event uses the existing attributes and metrics maps so all SDKs share the wire
+	// contract without a schema change. Leaving map_id empty keeps load timing out of spatial
+	// heatmaps and activation.
 
 	// Pending-measurement timer for a single in-flight map/level load. Not
 	// thread-safe by itself: the subsystem calls Begin/End on the game thread
@@ -39,9 +34,6 @@ namespace Framedash
 	class FMapLoadTimer
 	{
 	public:
-		// Begin (or replace) a pending measurement. Calling Begin again before End
-		// REPLACES the pending measurement -- the earlier start is discarded and only
-		// the most recent Begin/End pair is reported.
 		void Begin(double StartSeconds)
 		{
 			StartSeconds_ = StartSeconds;
@@ -65,15 +57,13 @@ namespace Framedash
 			return true;
 		}
 
-		// True while a Begin is awaiting its End.
 		bool HasPending() const { return bPending_; }
 
 		// Reset any pending measurement (called on (re-)init so a fresh session never
 		// completes a load begun by a prior session).
 		void Reset() { bPending_ = false; }
 
-		// Validate a directly-reported load time (ReportMapLoad). A NaN, Infinity, or
-		// negative value is rejected so the whole call is DROPPED (not clamped),
+		// A NaN, Infinity, or negative value is rejected so the whole call is DROPPED (not clamped),
 		// matching the drop-don't-clamp rule the manual metric feeds use.
 		static bool IsValidLoadTimeMs(double LoadTimeMs)
 		{
@@ -84,4 +74,4 @@ namespace Framedash
 		double StartSeconds_ = 0.0;
 		bool bPending_ = false;
 	};
-} // namespace Framedash
+}

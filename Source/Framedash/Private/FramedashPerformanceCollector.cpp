@@ -46,9 +46,6 @@ FFramedashPerformanceSnapshot FFramedashPerformanceCollector::Collect() const
 	// drop the batch.
 	Snapshot.GpuTimeMs = ClampTimingMs(FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles()));
 
-	// Thread timing: globals are in CPU cycles — convert to milliseconds, then
-	// clamp to the ingest range (replaces the prior >=0 floor; also caps the
-	// ceiling and rejects non-finite values).
 	Snapshot.GameThreadMs = ClampTimingMs(FPlatformTime::ToMilliseconds(GGameThreadTime));
 	Snapshot.RenderThreadMs = ClampTimingMs(FPlatformTime::ToMilliseconds(GRenderThreadTime));
 

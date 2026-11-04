@@ -31,12 +31,10 @@ class FRAMEDASH_API UFramedashSubsystem : public UGameInstanceSubsystem, public 
 public:
 	UFramedashSubsystem();
 
-	// USubsystem interface
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override { return true; }
 
-	// FTickableGameObject interface
 	virtual void Tick(float DeltaTime) override;
 	virtual bool IsTickable() const override { return !IsTemplate() && bInitialized; }
 	// Tick even while the game is paused so the flush/heartbeat cadence keeps
@@ -77,7 +75,7 @@ public:
 	/**
 	 * Begin an automated profiling session from the standard Framedash CI environment
 	 * variables: FRAMEDASH_BUILD_ID, FRAMEDASH_GIT_BRANCH, FRAMEDASH_GIT_COMMIT,
-	 * FRAMEDASH_TEST_SCENARIO. The planned `framedash run-profile-test` runner will export
+	 * FRAMEDASH_TEST_SCENARIO. The `framedash run-profile-test` runner exports
 	 * these before launching the game, so a CI integration needs only this one call. With
 	 * none of the variables set this is a no-op (no override is started). No-op if not
 	 * initialized.
@@ -110,7 +108,7 @@ public:
 		EFramedashTelemetrySource Source = EFramedashTelemetrySource::Player);
 
 	/**
-	 * Track an event with custom attributes and metrics (C++ only, TMap not supported in Blueprints by default).
+	 * TMap is not supported by Blueprints, so this entry point is C++ only.
 	 */
 	void TrackWithData(
 		const FString& EventName,
@@ -186,6 +184,21 @@ public:
 	void Flush();
 
 	/**
+	 * Synchronously flush and wait, up to TimeoutMs, for every event buffered at call time
+	 * (including any events restored from the offline queue and any batch already in flight) to be
+	 * confirmed delivered. Intended for moments where a short block is acceptable -- level end,
+	 * checkpoint, pre-quit -- to guarantee delivery instead of relying on the periodic 30s flush.
+	 *
+	 * WARNING: this BLOCKS the calling game thread for up to TimeoutMs while it applies isolated
+	 * Framedash request completions. Never call it every frame or from gameplay hot paths -- use
+	 * the fire-and-forget Flush() there. TimeoutMs is clamped to at most 30000 ms; the call never
+	 * blocks meaningfully past the budget.
+	 */
+	UFUNCTION(BlueprintCallable, Category="Framedash",
+		meta=(ToolTip="Blocks the game thread up to TimeoutMs (max 30000) to confirm delivery of all buffered events. Use only at safe pause points (level end, pre-quit), never per frame. Returns true only if everything was delivered within the budget; a batch confirmed late is still acknowledged but reports false. On timeout or transient failure events stay queued; a permanent server rejection (e.g. invalid API key) drops that batch and returns false."))
+	bool FlushBlocking(int32 TimeoutMs);
+
+	/**
 	 * Set a per-event-name sampling rate that overrides the global rate for that event.
 	 * Empty event names are ignored. Rate is clamped to [0, 1].
 	 * Has no effect if the SDK is not initialized.
@@ -204,6 +217,13 @@ public:
 	UFUNCTION(BlueprintPure, Category="Framedash")
 	bool IsInitialized() const { return bInitialized; }
 
+#if WITH_DEV_AUTOMATION_TESTS && FRAMEDASH_WITH_AUTOMATION_SPECS
+	// The dead-loopback FlushBlocking spec needs to distinguish an applied completion
+	// from a timeout whose pump never observed the pre-existing async request.
+	int32 GetRegisteredTransportCompletionCountForTesting() const;
+	int32 GetAppliedTransportCompletionCountForTesting() const;
+#endif
+
 	/** Get the current session ID. */
 	UFUNCTION(BlueprintPure, Category="Framedash")
 	FString GetSessionId() const;
@@ -215,27 +235,33 @@ private:
 	uint64 TrackInFlightBatch(const TArray<FFramedashEvent>& Events, int32& OutPersistedEventCount);
 	void CloseInFlightBatch(uint64 BatchId, int32 DeliveredLeadingEventCount);
 	void PersistInFlightBatches();
-	void PersistFailedEvents(TArray<FFramedashEvent>&& Events);
+	// BatchId gates the queue-off re-enqueue so only a currently tracked request can put its
+	// transiently failed events back in memory. Shutdown or an earlier close removes that
+	// ownership and makes a stale callback inert.
+	void PersistFailedEvents(TArray<FFramedashEvent>&& Events, uint64 BatchId);
 	void WaitForFailurePersistenceTasks();
 
-	/** Truncate string to max length. */
+	/**
+	 * One iteration of the FlushBlocking pump: run Framedash-owned dispatches produced by
+	 * background serialization, apply completed request snapshots, then yield briefly.
+	 * Both handoffs use isolated transport queues, including work started by the normal
+	 * async cadence before the blocking call. It never ticks the process-global HTTP
+	 * manager or drains the game-thread task graph, so unrelated delegates cannot re-enter
+	 * the wait.
+	 */
+	void PumpTelemetryDelivery();
+
 	static FString TruncateString(const FString& Input, int32 MaxLength);
 
 	/**
-	 * Emit the map_load event via the normal Track path (sampling, buffering, session
-	 * attributes). map_id stays EMPTY (keeps map_load out of spatial heatmap and
-	 * activation paths); MapName rides attributes["map_name"] and the load time
-	 * rides the metrics map as
-	 * load_time_ms (no proto/ClickHouse field, mirroring the io.* attributes-map
-	 * guardrail). A non-finite LoadTimeMs is dropped by TrackWithData's finite-metric
-	 * guard, matching the drop-not-clamp rule for the direct feed.
+	 * Leaving map_id empty keeps map_load out of spatial heatmaps and activation. Existing
+	 * attributes and metrics fields carry its name and timing without a proto or ClickHouse schema
+	 * change.
 	 */
 	void TrackMapLoad(const FString& MapName, double LoadTimeMs);
 
-	/** Refresh the cached camera rotation on the game thread (called from Tick). */
 	void UpdateCachedCameraRotation();
 
-	/** Stamp Evt.CameraYaw/CameraPitch from the thread-safe cached snapshot. */
 	void CaptureCameraRotation(FFramedashEvent& Evt) const;
 
 	// Sample memory detail (engine reads) and store it into the scalar cache
@@ -245,6 +271,8 @@ private:
 	// Sets bMemorySampleValid. Defined in the .cpp where the Private
 	// FramedashMemorySample.h / collector are visible.
 	void RefreshMemorySample();
+
+	void EmitPerformanceHeartbeat();
 
 	// TPimplPtr type-erases the deleter at construction time, so forward-declared
 	// (incomplete) types work without C4150 on MSVC. No out-of-line destructor needed.
@@ -307,6 +335,23 @@ private:
 	uint64 NextBatchId = 1;
 	bool bInitialized = false;
 	bool bIsFlushing = false;
+	// Set only while a FlushBlocking pump loop is active, so the shared flush
+	// callbacks record delivery outcome into bBlockingFlushSawFailure. Game-thread
+	// only (FlushBlocking and every flush callback run there), so no synchronization
+	// is needed. A pre-existing async cadence callback observes the current value when
+	// the blocking pump applies it, preserving the already-in-flight guarantee.
+	bool bObserveFlushDelivery = false;
+	// A real deadline is present only while bObserveFlushDelivery is true. Transport split
+	// children share it so each bounded serialize/gzip unit re-checks the same caller budget;
+	// async cadence sends receive the sentinel and keep their existing behavior.
+	double BlockingDeadlineSeconds = TNumericLimits<double>::Max();
+	// Set by a flush callback during a FlushBlocking wait when a batch was NOT delivered:
+	// OnTransientFailure (persisted / re-buffered for retry) or OnDropped (permanently
+	// dropped -- insecure endpoint, serialize failure, cross-origin redirect, or a
+	// poison/non-retryable HTTP status such as a 401 invalid key). Either way FlushBlocking
+	// returns false rather than falsely reporting success just because the in-memory buffer
+	// drained. Reset at the start of each FlushBlocking call.
+	bool bBlockingFlushSawFailure = false;
 	bool bWarnedEmptyPlayerId = false;
 	bool bOfflineQueueEnabled = true;
 	bool bCaptureCameraRotation = true;
@@ -324,8 +369,6 @@ private:
 	// thread only (Tick). Empty and untouched while no source is active, so the default
 	// heartbeat keeps its zero-allocation Track() path.
 	TMap<FString, double> HeartbeatMetrics;
-	// mem.* key set (Framedash::kMemBit* bits) attached to HeartbeatMetrics on the last
-	// heartbeat, used to diff and Remove keys that vanished. Reset in InitializeInternal.
 	uint32 PrevMemHeartbeatMask = 0;
 
 	// This subsystem's own baseline snapshot of the process-global cumulative IO
@@ -347,13 +390,11 @@ private:
 	// FFramedashIoTrackingPlatformFile).
 	bool bTrackDiskIoInstalled = false;
 
-	// True once a manual ReportIoSample was ACCEPTED during THIS session (set on the
-	// accepted path, reset in InitializeInternal). Together with bTrackDiskIoInstalled
-	// this gates the heartbeat io.* attach on SESSION-scoped state, so a later
-	// telemetry session in the same process (UE Editor/PIE) with disk-IO tracking off
-	// and no manual feed attaches NO io.* keys -- honoring "absent = not collected"
-	// even though the process-global accumulator may have been fed by an earlier
-	// session. Not the accumulator's business (it is process-wide), so tracked here.
+	// Together with bTrackDiskIoInstalled this gates the heartbeat io.* attach on SESSION-scoped
+	// state, so a later telemetry session in the same process (UE Editor/PIE) with disk-IO
+	// tracking off and no manual feed attaches NO io.* keys -- honoring "absent = not collected"
+	// even though the process-global accumulator may have been fed by an earlier session. Not the
+	// accumulator's business (it is process-wide), so tracked here.
 	bool bIoManualFeedAccepted = false;
 
 	// Session-scoped latch of the bTrackMemoryDetail setting, cached at init. Like

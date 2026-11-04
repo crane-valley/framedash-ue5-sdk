@@ -12,8 +12,6 @@
 namespace
 {
 
-// Ticks (100ns) between FDateTime epoch (0001-01-01T00:00:00Z) and Unix
-// epoch (1970-01-01T00:00:00Z). Matches FDateTime::ToUnixTimestamp.
 constexpr int64 UnixEpochInDateTimeTicks = 621355968000000000;
 
 // Trim whitespace and truncate to the ingest player_id cap. An over-limit
@@ -66,7 +64,7 @@ FString NewSessionIdV7()
 		.ToString(EGuidFormats::DigitsWithHyphensLower);
 }
 
-} // namespace
+}
 
 FFramedashSessionManager::FFramedashSessionManager(const FString& InPlayerId)
 	: PlayerId(NormalizePlayerId(InPlayerId))

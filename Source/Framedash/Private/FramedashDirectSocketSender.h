@@ -66,15 +66,10 @@ struct FFramedashPlanCache
 namespace FramedashDirectSocket
 {
 	/**
-	 * Return the cached delivery plan, kicking off an async DNS resolve
-	 * (GetAddressInfoAsync, single-flight) when the cache is not final and
-	 * waiting a BOUNDED ~3s for it -- background thread only. A slow
-	 * resolver keeps running detached and writes the cache on completion,
-	 * so it can never wedge the flush pipeline (the caller proceeds as
-	 * status 0 and a later attempt reads the completed cache). Returns null
-	 * when the fallback must not engage (passthrough endpoint, resolution
-	 * failure, or the resolve still running past the wait cap). Never
-	 * throws.
+	 * A slow resolver keeps running detached and writes the cache on completion, so it can never
+	 * wedge the flush pipeline (the caller proceeds as status 0 and a later attempt reads the
+	 * completed cache). Returns null when the fallback must not engage (passthrough endpoint,
+	 * resolution failure, or the resolve still running past the wait cap). Never throws.
 	 */
 	TSharedPtr<const Framedash::FAddressPlan, ESPMode::ThreadSafe> AcquirePlan(
 		const FString& EndpointUrl,
@@ -98,4 +93,4 @@ namespace FramedashDirectSocket
 		ISslCertificateManager& CertificateManager);
 }
 
-#endif // FRAMEDASH_WITH_DIRECT_SOCKET_TLS
+#endif

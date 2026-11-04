@@ -23,9 +23,8 @@ namespace
 const double kQuietNaN = std::numeric_limits<double>::quiet_NaN();
 const double kPosInf = std::numeric_limits<double>::infinity();
 const double kNegInf = -std::numeric_limits<double>::infinity();
-} // namespace
+}
 
-// -- Begin / End timing ------------------------------------------------------
 
 TEST(MapLoadTimer, EndAfterBeginComputesElapsedMs)
 {
@@ -50,7 +49,6 @@ TEST(MapLoadTimer, SubSecondLoadComputesFractionalMs)
 	EXPECT_DOUBLE_EQ(ElapsedMs, 250.0);
 }
 
-// -- End without Begin is a no-op --------------------------------------------
 
 TEST(MapLoadTimer, EndWithoutBeginReturnsFalseNoOp)
 {
@@ -70,12 +68,10 @@ TEST(MapLoadTimer, EndTwiceSecondReturnsFalse)
 
 	double ElapsedMs = 0.0;
 	EXPECT_TRUE(Timer.End(2.0, ElapsedMs));
-	// Pending state cleared after the first End.
 	EXPECT_FALSE(Timer.End(3.0, ElapsedMs));
 	EXPECT_DOUBLE_EQ(ElapsedMs, 0.0);
 }
 
-// -- Begin again before End replaces the pending measurement -----------------
 
 TEST(MapLoadTimer, BeginTwiceReplacesPendingMeasurement)
 {
@@ -87,11 +83,9 @@ TEST(MapLoadTimer, BeginTwiceReplacesPendingMeasurement)
 	const bool bCompleted = Timer.End(21.0, ElapsedMs);
 
 	EXPECT_TRUE(bCompleted);
-	// The second Begin wins: elapsed is measured from the later start.
 	EXPECT_DOUBLE_EQ(ElapsedMs, 1000.0);
 }
 
-// -- Backwards clock is floored at 0, never negative -------------------------
 
 TEST(MapLoadTimer, BackwardsClockFloorsElapsedAtZero)
 {
@@ -104,7 +98,6 @@ TEST(MapLoadTimer, BackwardsClockFloorsElapsedAtZero)
 	EXPECT_DOUBLE_EQ(ElapsedMs, 0.0);
 }
 
-// -- HasPending / Reset lifecycle --------------------------------------------
 
 TEST(MapLoadTimer, HasPendingTracksLifecycle)
 {
@@ -130,7 +123,6 @@ TEST(MapLoadTimer, ResetClearsPending)
 	EXPECT_FALSE(Timer.End(1.0, ElapsedMs));
 }
 
-// -- IsValidLoadTimeMs: drop (not clamp) rules for ReportMapLoad -------------
 
 TEST(MapLoadTimer, IsValidLoadTimeMsZeroAndPositiveValid)
 {

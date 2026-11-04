@@ -30,9 +30,9 @@ namespace FieldClamps
 	// Server limits mirrored here (packages/ingest-core/src/config.ts). Kept as
 	// pure-C++ constants so this header has no dependency on the Unreal-side
 	// FramedashConstants (which pulls in CoreMinimal via FramedashTypes.h).
-	constexpr double PositionAbsMax = 1e9;   // POSITION_ABS_MAX
-	constexpr float FpsMax = 1000.0f;        // FPS_MAX
-	constexpr float TimingMsMax = 10000.0f;  // FRAME/GPU/GAME/RENDER thread ms ceiling
+	constexpr double PositionAbsMax = 1e9;
+	constexpr float FpsMax = 1000.0f;
+	constexpr float TimingMsMax = 10000.0f;
 
 	// position x/y/z: ingest rejects NaN/Inf or |v| > 1e9 (validation.ts
 	// POSITION_FIELDS). Map non-finite to 0 and clamp magnitude to the cap.
@@ -67,10 +67,8 @@ namespace FieldClamps
 		return std::min(fps, FpsMax);
 	}
 
-	// Replicate Godot's fps-from-frame-time path exactly: fps = frameTimeMs > 0 ?
-	// min(1000, 1000 / frameTimeMs) : 0. Provided for parity with the Godot
-	// canonical reference; the UE collector uses ClampFps on its own 1/DeltaTime
-	// computation (it tracks frame time separately).
+	// Matching Godot's conversion keeps clamping and zero-frame-time behavior consistent across
+	// SDKs.
 	inline float FpsFromFrameTimeMs(float frameTimeMs)
 	{
 		if (!std::isfinite(frameTimeMs) || frameTimeMs <= 0.0f) return 0.0f;
@@ -81,11 +79,11 @@ namespace FieldClamps
 	// MEMORY_USED_BYTES_MAX). Floor a negative/garbage reading at 0 and cap an
 	// oversized one (high-memory editor / workstation / dedicated-server runs) at
 	// the ceiling, so one large sample cannot drop the whole batch.
-	constexpr int64_t MemoryBytesMax = 64LL * 1024 * 1024 * 1024; // 64 GiB
+	constexpr int64_t MemoryBytesMax = 64LL * 1024 * 1024 * 1024;
 	inline int64_t ClampMemoryBytes(int64_t v)
 	{
 		if (v < 0) return 0;
 		return v < MemoryBytesMax ? v : MemoryBytesMax;
 	}
-} // namespace FieldClamps
-} // namespace Framedash
+}
+}

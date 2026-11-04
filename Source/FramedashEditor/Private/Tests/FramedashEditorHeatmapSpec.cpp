@@ -126,6 +126,43 @@ void FFramedashEditorHeatmapSpec::Define()
 
 	Describe("REST response parsing", [this]()
 	{
+		It("classifies transport and HTTP failures before payload parsing", [this]()
+		{
+			FString Error;
+			TestFalse(
+				TEXT("transport failure rejected"),
+				FramedashEditor::ValidateHttpResponse(
+					false,
+					0,
+					FString(),
+					TEXT("Network failure"),
+					Error));
+			TestEqual(TEXT("transport error preserved"), Error, FString(TEXT("Network failure")));
+
+			TestFalse(
+				TEXT("HTTP failure rejected"),
+				FramedashEditor::ValidateHttpResponse(
+					true,
+					403,
+					TEXT(R"JSON({"detail":"analytics:read scope required"})JSON"),
+					FString(),
+					Error));
+			TestEqual(
+				TEXT("problem detail preserved"),
+				Error,
+				FString(TEXT("analytics:read scope required")));
+
+			TestTrue(
+				TEXT("HTTP 200 accepted"),
+				FramedashEditor::ValidateHttpResponse(
+					true,
+					200,
+					FString(),
+					FString(),
+					Error));
+			TestTrue(TEXT("successful response has no error"), Error.IsEmpty());
+		});
+
 		It("parses a valid maps response", [this]()
 		{
 			const FString Json = TEXT(R"JSON({"success":true,"data":[{"id":"11111111-1111-1111-1111-111111111111","name":"Arena","mapId":"arena","imageUrl":"https://example.test/map.png","worldMinX":-100,"worldMinY":-50,"worldMaxX":100,"worldMaxY":75,"worldMinZ":10,"worldMaxZ":200,"imageWidth":1024,"imageHeight":512,"createdAt":"2026-07-01T00:00:00Z","updatedAt":"2026-07-02T00:00:00Z"}]})JSON");
@@ -604,4 +641,4 @@ void FFramedashEditorHeatmapSpec::Define()
 	});
 }
 
-#endif // WITH_DEV_AUTOMATION_TESTS && FRAMEDASH_EDITOR_WITH_AUTOMATION_SPECS
+#endif

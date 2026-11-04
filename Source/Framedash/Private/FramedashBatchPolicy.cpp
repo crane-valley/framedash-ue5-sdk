@@ -19,4 +19,14 @@ bool FBatchPolicy::ExceedsWireCaps(int32_t EventCount, int64_t DecodedEntryCount
 		|| DecodedEntryCount > static_cast<int64_t>(MaxDecodedEntries);
 }
 
-} // namespace Framedash
+bool FBatchPolicy::ExceedsBlockingChunkBytes(int32_t EventCount, int64_t EstimatedBytes)
+{
+	if (EventCount <= 1)
+	{
+		return false;
+	}
+
+	return EstimatedBytes > MaxBlockingChunkBytes;
+}
+
+}

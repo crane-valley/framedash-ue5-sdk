@@ -24,9 +24,8 @@ FRetryPolicy MakeDefault()
 	return FRetryPolicy(kMaxRetries, kBaseDelay);
 }
 
-} // namespace
+}
 
-// -- IsNonRetryableError --------------------------------------------------
 
 TEST(RetryPolicy, IsNonRetryableError_4xx_ReturnsTrue)
 {
@@ -40,14 +39,12 @@ TEST(RetryPolicy, IsNonRetryableError_4xx_ReturnsTrue)
 
 TEST(RetryPolicy, IsNonRetryableError_413_ReturnsFalse)
 {
-	// 413 triggers batch split, not a non-retryable error.
 	const auto Policy = MakeDefault();
 	EXPECT_FALSE(Policy.IsNonRetryableError(413));
 }
 
 TEST(RetryPolicy, IsNonRetryableError_429_ReturnsFalse)
 {
-	// 429 is retryable (rate limit backoff).
 	const auto Policy = MakeDefault();
 	EXPECT_FALSE(Policy.IsNonRetryableError(429));
 }
@@ -59,7 +56,6 @@ TEST(RetryPolicy, IsNonRetryableError_5xx_ReturnsFalse)
 	EXPECT_FALSE(Policy.IsNonRetryableError(503));
 }
 
-// -- ShouldSplitBatch -----------------------------------------------------
 
 TEST(RetryPolicy, ShouldSplitBatch_413_MultipleEvents_ReturnsTrue)
 {
@@ -83,7 +79,6 @@ TEST(RetryPolicy, ShouldSplitBatch_NonOversize_ReturnsFalse)
 	EXPECT_FALSE(Policy.ShouldSplitBatch(200, 10));
 }
 
-// -- GetRetryDelaySeconds -------------------------------------------------
 
 TEST(RetryPolicy, GetRetryDelaySeconds_ExponentialBackoff)
 {
@@ -106,7 +101,7 @@ TEST(RetryPolicy, GetRetryDelaySeconds_LargeAttempt_DoesNotOverflow)
 
 TEST(RetryPolicy, GetRetryDelaySeconds_CustomBase_ClampsAtMaxDelay)
 {
-	FRetryPolicy Policy(/*MaxRetries=*/10, /*BaseDelaySeconds=*/10.0f);
+	FRetryPolicy Policy( 10,  10.0f);
 	EXPECT_FLOAT_EQ(Policy.GetRetryDelaySeconds(3), 60.0f);
 }
 
@@ -118,13 +113,12 @@ TEST(RetryPolicy, GetRetryDelaySeconds_NegativeAttempt_TreatsAsZero)
 
 TEST(RetryPolicy, GetRetryDelaySeconds_CustomBase_ScalesCorrectly)
 {
-	FRetryPolicy Policy(/*MaxRetries=*/3, /*BaseDelaySeconds=*/0.5f);
+	FRetryPolicy Policy( 3,  0.5f);
 	EXPECT_FLOAT_EQ(Policy.GetRetryDelaySeconds(0), 0.5f);
 	EXPECT_FLOAT_EQ(Policy.GetRetryDelaySeconds(1), 1.0f);
 	EXPECT_FLOAT_EQ(Policy.GetRetryDelaySeconds(2), 2.0f);
 }
 
-// -- Classify -------------------------------------------------------------
 
 TEST(RetryPolicy, Classify_2xx_ReturnsSuccess)
 {
@@ -195,7 +189,6 @@ TEST(RetryPolicy, Classify_3xx_ReturnsFail)
 	EXPECT_EQ(Policy.Classify(304, 0, 10), ERetryAction::Fail);
 }
 
-// -- Constructor defaults -------------------------------------------------
 
 TEST(RetryPolicy, Constructor_DefaultValues)
 {
@@ -206,14 +199,14 @@ TEST(RetryPolicy, Constructor_DefaultValues)
 
 TEST(RetryPolicy, Constructor_InvalidValues_FallsBackToDefaults)
 {
-	FRetryPolicy Policy(/*MaxRetries=*/-1, /*BaseDelaySeconds=*/-1.0f);
+	FRetryPolicy Policy( -1,  -1.0f);
 	EXPECT_EQ(Policy.GetMaxRetries(), 5);
 	EXPECT_FLOAT_EQ(Policy.GetBaseDelaySeconds(), 1.0f);
 }
 
 TEST(RetryPolicy, Constructor_ZeroValues_AreAllowed)
 {
-	FRetryPolicy Policy(/*MaxRetries=*/0, /*BaseDelaySeconds=*/0.0f);
+	FRetryPolicy Policy( 0,  0.0f);
 	EXPECT_EQ(Policy.GetMaxRetries(), 0);
 	EXPECT_FLOAT_EQ(Policy.GetBaseDelaySeconds(), 0.0f);
 	EXPECT_EQ(Policy.Classify(500, 0, 10), ERetryAction::Fail);
@@ -222,7 +215,7 @@ TEST(RetryPolicy, Constructor_ZeroValues_AreAllowed)
 
 TEST(RetryPolicy, Constructor_CustomValues)
 {
-	FRetryPolicy Policy(/*MaxRetries=*/3, /*BaseDelaySeconds=*/2.0f);
+	FRetryPolicy Policy( 3,  2.0f);
 	EXPECT_EQ(Policy.GetMaxRetries(), 3);
 	EXPECT_FLOAT_EQ(Policy.GetBaseDelaySeconds(), 2.0f);
 }

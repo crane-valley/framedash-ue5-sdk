@@ -224,6 +224,33 @@ FString ParseProblemMessage(const FString& Json, const FString& Fallback)
 	return Fallback;
 }
 
+bool ValidateHttpResponse(
+	bool bConnected,
+	int32 StatusCode,
+	const FString& Body,
+	const FString& RequestError,
+	FString& OutError)
+{
+	if (!bConnected)
+	{
+		OutError = RequestError.IsEmpty()
+			? FString(TEXT("Unable to reach the Framedash API."))
+			: RequestError;
+		return false;
+	}
+	if (StatusCode != 200)
+	{
+		const FString Fallback = StatusCode > 0
+			? FString::Printf(TEXT("Framedash request failed (HTTP %d)."), StatusCode)
+			: FString(TEXT("Framedash request failed."));
+		OutError = ParseProblemMessage(Body, Fallback);
+		return false;
+	}
+
+	OutError.Reset();
+	return true;
+}
+
 FCellRect BuildCellRect(
 	const FHeatmapCell& Cell,
 	const FMapInfo& Map,

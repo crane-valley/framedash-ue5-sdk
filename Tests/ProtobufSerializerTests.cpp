@@ -188,7 +188,7 @@ std::vector<Framedash::FTelemetryEvent> DecodeTelemetryBatch(const std::vector<u
 	return Events;
 }
 
-} // anonymous namespace
+}
 
 TEST(ProtobufSerializer, SerializeTelemetryBatch_RoundTripsAllSupportedFields)
 {
@@ -276,7 +276,6 @@ TEST(ProtobufSerializer, SerializeTelemetryBatch_CameraPresentMismatch_OmitsBoth
 	Input.EventName = "cam_partial";
 	Input.TimestampUs = 1;
 	Input.CameraYaw = 90.0f;
-	// CameraPitch intentionally left unset.
 
 	std::vector<uint8_t> Bytes;
 	ASSERT_TRUE(Framedash::SerializeTelemetryBatch({Input}, Bytes));
@@ -289,7 +288,6 @@ TEST(ProtobufSerializer, SerializeTelemetryBatch_CameraPresentMismatch_OmitsBoth
 
 TEST(ProtobufSerializer, SerializeTelemetryBatch_CameraNonFinite_OmitsBoth)
 {
-	// finite-only: a NaN/Inf component must drop both fields.
 	Framedash::FTelemetryEvent Input;
 	Input.EventName = "cam_nan";
 	Input.TimestampUs = 1;
@@ -312,4 +310,35 @@ TEST(ProtobufSerializer, SerializeTelemetryBatch_EmptyBatch_EncodesSuccessfully)
 
 	const std::vector<Framedash::FTelemetryEvent> Output = DecodeTelemetryBatch(Bytes);
 	EXPECT_TRUE(Output.empty());
+}
+
+TEST(ProtobufSerializer, SerializeTelemetryBatch_SerializesLegalCjkAttributePayload)
+{
+	std::string CjkValue;
+	CjkValue.reserve(512 * 3);
+	for (int32_t Index = 0; Index < 512; ++Index)
+	{
+		CjkValue.append("\xE6\xBC\xA2");
+	}
+
+	std::vector<Framedash::FTelemetryEvent> Input(12);
+	for (size_t EventIndex = 0; EventIndex < Input.size(); ++EventIndex)
+	{
+		Input[EventIndex].EventName = "blocking_heavy";
+		Input[EventIndex].TimestampUs = static_cast<int64_t>(EventIndex + 1);
+		for (int32_t AttributeIndex = 0; AttributeIndex < 30; ++AttributeIndex)
+		{
+			Input[EventIndex].Attributes.emplace_back(
+				"heavy_key_" + std::to_string(AttributeIndex),
+				CjkValue);
+		}
+	}
+
+	std::vector<uint8_t> Bytes;
+	ASSERT_TRUE(Framedash::SerializeTelemetryBatch(Input, Bytes));
+
+	const std::vector<Framedash::FTelemetryEvent> Output = DecodeTelemetryBatch(Bytes);
+	ASSERT_EQ(Output.size(), Input.size());
+	ASSERT_EQ(Output[0].Attributes.size(), Input[0].Attributes.size());
+	EXPECT_EQ(Output[0].Attributes[0].second, CjkValue);
 }

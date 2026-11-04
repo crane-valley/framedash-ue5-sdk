@@ -64,11 +64,6 @@
 
 #include <atomic>
 
-/**
- * Chaining IPlatformFile that meters synchronous reads. Transparent: all
- * operations delegate to the wrapped lower-level platform file; only the
- * OpenRead-returned handle is metered.
- */
 class FFramedashIoTrackingPlatformFile final : public IPlatformFile
 {
 public:
@@ -83,14 +78,8 @@ public:
 	 */
 	static void Install();
 
-	/**
-	 * Stop counting: flip the installed wrapper's enabled flag to false. The
-	 * wrapper stays in the chain (never unchained) and keeps delegating. No-op if
-	 * nothing was installed.
-	 */
 	static void Disable();
 
-	// --- IPlatformFile: initialization / chain management -------------------
 	virtual bool ShouldBeUsed(IPlatformFile* Inner, const TCHAR* CmdLine) const override;
 	virtual bool Initialize(IPlatformFile* Inner, const TCHAR* CmdLine) override;
 	virtual void InitializeAfterSetActive() override { LowerLevel->InitializeAfterSetActive(); }
@@ -102,7 +91,6 @@ public:
 	virtual void SetLowerLevel(IPlatformFile* NewLowerLevel) override { LowerLevel = NewLowerLevel; }
 	virtual const TCHAR* GetName() const override { return TEXT("FramedashIoTracking"); }
 
-	// --- IPlatformFile: file queries / mutations (pure passthrough) ---------
 	virtual bool FileExists(const TCHAR* Filename) override { return LowerLevel->FileExists(Filename); }
 	virtual int64 FileSize(const TCHAR* Filename) override { return LowerLevel->FileSize(Filename); }
 	virtual bool DeleteFile(const TCHAR* Filename) override { return LowerLevel->DeleteFile(Filename); }
@@ -119,8 +107,6 @@ public:
 	virtual bool HasMarkOfTheWeb(FStringView Filename, FString* OutSourceURL = nullptr) override { return LowerLevel->HasMarkOfTheWeb(Filename, OutSourceURL); }
 	virtual bool SetMarkOfTheWeb(FStringView Filename, bool bNewStatus, const FString* InSourceURL = nullptr) override { return LowerLevel->SetMarkOfTheWeb(Filename, bNewStatus, InSourceURL); }
 
-	// --- IPlatformFile: handle factories ------------------------------------
-	// OpenRead is the metered path: the returned handle is wrapped to count reads.
 	virtual IFileHandle* OpenRead(const TCHAR* Filename, bool bAllowWrite = false) override;
 	virtual IFileHandle* OpenWrite(const TCHAR* Filename, bool bAppend = false, bool bAllowRead = false) override { return LowerLevel->OpenWrite(Filename, bAppend, bAllowRead); }
 
@@ -163,7 +149,6 @@ public:
 	virtual FOpenMappedResult OpenMappedEx2(const TCHAR* Filename, EOpenMappedFlags OpenOptions = EOpenMappedFlags::None, int64 MaximumSize = 0) override;
 #endif
 
-	// --- IPlatformFile: directory operations --------------------------------
 	virtual bool DirectoryExists(const TCHAR* Directory) override { return LowerLevel->DirectoryExists(Directory); }
 	virtual bool CreateDirectory(const TCHAR* Directory) override { return LowerLevel->CreateDirectory(Directory); }
 	virtual bool DeleteDirectory(const TCHAR* Directory) override { return LowerLevel->DeleteDirectory(Directory); }
@@ -185,13 +170,11 @@ public:
 	virtual FString ConvertToAbsolutePathForExternalAppForRead(const TCHAR* Filename) override { return LowerLevel->ConvertToAbsolutePathForExternalAppForRead(Filename); }
 	virtual FString ConvertToAbsolutePathForExternalAppForWrite(const TCHAR* Filename) override { return LowerLevel->ConvertToAbsolutePathForExternalAppForWrite(Filename); }
 
-	// --- IPlatformFile: misc ------------------------------------------------
 	virtual bool SendMessageToServer(const TCHAR* Message, IFileServerMessageHandler* Handler) override { return LowerLevel->SendMessageToServer(Message, Handler); }
 	virtual bool DoesCreatePublicFiles() override { return LowerLevel->DoesCreatePublicFiles(); }
 	virtual void SetCreatePublicFiles(bool bCreatePublicFiles) override { LowerLevel->SetCreatePublicFiles(bCreatePublicFiles); }
 
 private:
-	// The wrapped (lower) platform file. Never null once Initialize succeeds.
 	IPlatformFile* LowerLevel = nullptr;
 
 	// When false, OpenRead returns the lower handle unwrapped so no counting

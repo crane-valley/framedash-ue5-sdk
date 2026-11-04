@@ -26,7 +26,6 @@ namespace
 	constexpr const char* IngestUrl = "https://ingest.framedash.dev/v1/events";
 }
 
-// -- ShouldForceAddressFamily ------------------------------------------
 
 TEST(ShouldForceAddressFamily, RemoteHttpsHostnameQualifies)
 {
@@ -89,7 +88,6 @@ TEST(ShouldForceAddressFamily, MalformedExplicitPortDoesNotQualify)
 	EXPECT_FALSE(ShouldForceAddressFamily("https://example.com:/x"));
 }
 
-// -- BuildAddressPlan ---------------------------------------------------
 
 TEST(BuildAddressPlan, IPv4PreferredThenIPv6)
 {
@@ -151,12 +149,11 @@ TEST(BuildAddressPlan, ExplicitPortFlowsIntoHostHeaderAndPort)
 	EXPECT_EQ(Plan.RequestTarget, "/v1/events?fresh=1");
 }
 
-// -- NextFamilyIndex ----------------------------------------------------
 
 TEST(NextFamilyIndex, TogglesBetweenTwoFamilies)
 {
 	EXPECT_EQ(NextFamilyIndex(0, 2), 1);
-	EXPECT_EQ(NextFamilyIndex(1, 2), 0); // wraps back to preferred IPv4
+	EXPECT_EQ(NextFamilyIndex(1, 2), 0);
 }
 
 TEST(NextFamilyIndex, SingleAttemptStaysAtZero)
@@ -171,7 +168,6 @@ TEST(NextFamilyIndex, DegenerateCountsStayAtZero)
 	EXPECT_EQ(NextFamilyIndex(-5, 2), 0);
 }
 
-// -- HostHeaderValue / ExtractRequestTarget / ExtractPortOrDefault ------
 
 TEST(HostHeaderValue, DefaultPortOmitted)
 {

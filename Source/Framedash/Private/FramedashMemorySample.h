@@ -44,21 +44,16 @@ namespace Framedash
 	// inventing a 0.
 	struct FMemorySampleInputs
 	{
-		// True when the RHI was available and RHIGetTextureMemoryStats was read.
 		bool bRhiValid = false;
-		// Video memory in use (bytes): streaming + non-streaming texture allocations.
 		int64_t VramBytes = 0;
 
-		// True when LLM was compiled in AND enabled at runtime (-llm). When false,
-		// the category amounts below are meaningless and never emitted.
+		// LLM category amounts are meaningless unless LLM is both compiled in and enabled at runtime.
 		bool bLlmEnabled = false;
 		int64_t TexturesBytes = 0;
 		int64_t MeshesBytes = 0;
 		int64_t AudioBytes = 0;
 	};
 
-	// Per-key presence + value after applying the emit rules. Only fields with the
-	// matching bHas* set are attached to the metrics map by the caller.
 	struct FMemoryMetrics
 	{
 		bool bHasVram = false;
@@ -123,7 +118,6 @@ namespace Framedash
 		kMemBitAudio = 1u << 3,
 	};
 
-	// Bitmask of the categories present in a selected sample.
 	inline uint32_t MemoryPresenceMask(const FMemoryMetrics& M)
 	{
 		uint32_t Mask = 0;
@@ -163,7 +157,6 @@ namespace Framedash
 		int64_t Value = 0;
 	};
 
-	// Maximum entries CollectMemoryMetricEntries can write (vram + 3 categories).
 	inline constexpr int32_t kMaxMemoryMetricEntries = 4;
 
 	// Enumerate the PRESENT keys of a selected sample into Out (capacity
@@ -226,4 +219,4 @@ namespace Framedash
 		}
 		return Count;
 	}
-} // namespace Framedash
+}

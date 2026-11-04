@@ -32,9 +32,6 @@ namespace Framedash
 class FBatchPolicy
 {
 public:
-	// Server-side per-request event cap (mirrors
-	// packages/ingest-core/src/config.ts MAX_EVENTS_PER_BATCH).
-	// The consumer rejects a batch with more events than this wholesale.
 	static constexpr int32_t MaxEventsPerBatch = 10000;
 
 	// Server-side per-request decoded-object cap (mirrors
@@ -46,6 +43,11 @@ public:
 	// 110,000 entries > cap).
 	static constexpr int32_t MaxDecodedEntries = 100000;
 
+	// A blocking serialize + gzip cannot observe the deadline mid-operation. Matching
+	// Unity's 1 MiB estimate cap keeps each indivisible CPU unit small enough for the
+	// caller to regain control and re-check its shared budget between split children.
+	static constexpr int64_t MaxBlockingChunkBytes = 1LL << 20;
+
 	// Whether the batch must be chunked before sending because it would be
 	// rejected wholesale by a server per-request cap.
 	//
@@ -56,6 +58,10 @@ public:
 	// be split further and must reach the payload-byte path or 413 handling.
 	// Negative inputs are treated as 0.
 	static bool ExceedsWireCaps(int32_t EventCount, int64_t DecodedEntryCount);
+
+	// A single event cannot be split further, so it remains the accepted residual
+	// indivisible unit even when its conservative estimate exceeds the cap.
+	static bool ExceedsBlockingChunkBytes(int32_t EventCount, int64_t EstimatedBytes);
 };
 
-} // namespace Framedash
+}

@@ -53,4 +53,4 @@ bool SerializeTelemetryBatch(
 	const std::vector<FTelemetryEvent>& Events,
 	std::vector<uint8_t>& OutBytes);
 
-} // namespace Framedash
+}

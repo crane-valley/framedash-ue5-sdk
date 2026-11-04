@@ -29,17 +29,14 @@ public:
 	int GetMaxRetries() const { return MaxRetries; }
 	float GetBaseDelaySeconds() const { return BaseDelaySeconds; }
 
-	// True when the response warrants splitting the batch in half.
-	// Only HTTP 413 with more than one event qualifies; a single
-	// oversized event cannot be split further.
+	// Only HTTP 413 with more than one event qualifies; a single oversized event cannot be split
+	// further.
 	bool ShouldSplitBatch(int HttpStatusCode, int EventCount) const;
 
-	// True for 4xx responses that should not be retried.
-	// 413 (split) and 429 (rate limit) are deliberately excluded.
+	// A 413 batch can split and a 429 can succeed after rate-limit backoff, so neither is a
+	// permanent client rejection.
 	bool IsNonRetryableError(int HttpStatusCode) const;
 
-	// Exponential backoff: BaseDelaySeconds * 2^Attempt.
-	// Negative attempts clamp to 0.
 	float GetRetryDelaySeconds(int Attempt) const;
 
 	// Classify the response into the action the transport should take.
@@ -58,4 +55,4 @@ private:
 	float BaseDelaySeconds;
 };
 
-} // namespace Framedash
+}

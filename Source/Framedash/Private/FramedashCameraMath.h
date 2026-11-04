@@ -10,7 +10,6 @@ namespace Framedash
 	// Coordinates) pass without an implicit narrowing conversion at the call site;
 	// the final narrowing to the float wire type is an explicit cast here.
 
-	// Normalize a yaw angle (degrees) to [0, 360). Input may be any finite value.
 	inline float NormalizeYawDegrees(double YawDegrees)
 	{
 		double Result = std::fmod(YawDegrees, 360.0);
@@ -29,8 +28,6 @@ namespace Framedash
 		return Out;
 	}
 
-	// Normalize an Unreal FRotator pitch (degrees, positive = looking up) to
-	// [-90, 90]. Accepts [0,360) or signed input; folds to (-180,180] then clamps.
 	inline float NormalizePitchDegrees(double PitchDegrees)
 	{
 		double P = std::fmod(PitchDegrees, 360.0);

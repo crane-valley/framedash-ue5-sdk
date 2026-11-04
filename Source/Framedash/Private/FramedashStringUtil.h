@@ -16,11 +16,6 @@
 
 namespace Framedash
 {
-	/**
-	 * Truncate Input to at most MaxUnits UTF-16 code units without splitting a
-	 * surrogate pair. Returns "" for MaxUnits <= 0 and Input unchanged when it is
-	 * already within budget.
-	 */
 	inline FString TruncateToUtf16Units(const FString& Input, int32 MaxUnits)
 	{
 		if (MaxUnits <= 0)
@@ -46,8 +41,8 @@ namespace Framedash
 		while (Cut < NumElements)
 		{
 			const uint32 Element = static_cast<uint32>(Input[Cut]);
-			int32 Advance = 1; // FString elements consumed by this code point
-			int32 Width = 1;   // UTF-16 code units contributed
+			int32 Advance = 1;
+			int32 Width = 1;
 			if (sizeof(TCHAR) == 2)
 			{
 				// UTF-16 element: a high surrogate followed by a low surrogate is a
@@ -65,7 +60,6 @@ namespace Framedash
 			}
 			else if (Element >= 0x10000u)
 			{
-				// UTF-32 element: a non-BMP code point is 2 UTF-16 units.
 				Width = 2;
 			}
 

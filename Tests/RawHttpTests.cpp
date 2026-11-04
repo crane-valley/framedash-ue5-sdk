@@ -25,7 +25,6 @@ namespace
 	}
 }
 
-// -- BuildPostHead ------------------------------------------------------
 
 TEST(BuildPostHead, GzippedHeadMatchesWireShape)
 {
@@ -57,8 +56,6 @@ TEST(BuildPostHead, CrLfInHeaderValuesCannotSplitRequest)
 	// extra header line (request-smuggling shape).
 	const std::string Head = BuildPostHead(
 		"/v1/events", "h.example", "evil\r\nX-Injected: 1", "v\r\n\r\nGET / HTTP/1.1", 5, true);
-	// The injected text may survive INSIDE the value, but never as its own
-	// header line (no CR/LF can remain in the value).
 	EXPECT_EQ(Head.find("\r\nX-Injected"), std::string::npos);
 	EXPECT_NE(Head.find("X-API-Key: evilX-Injected: 1\r\n"), std::string::npos);
 	EXPECT_NE(Head.find("X-SDK-Version: vGET / HTTP/1.1\r\n"), std::string::npos);
@@ -71,7 +68,6 @@ TEST(BuildPostHead, SpaceInTargetCannotSplitRequestLine)
 	EXPECT_EQ(Head.substr(0, Head.find("\r\n")), "POST /v1/eventsHTTP/1.1GET/steal HTTP/1.1");
 }
 
-// -- SanitizeRequestTarget ----------------------------------------------
 
 TEST(SanitizeRequestTarget, PassthroughForNormalTarget)
 {
@@ -91,7 +87,6 @@ TEST(SanitizeRequestTarget, ForcesOriginFormLeadingSlash)
 	EXPECT_EQ(SanitizeRequestTarget(" \r\n"), "/");
 }
 
-// -- SanitizeHeaderValue --------------------------------------------------
 
 TEST(SanitizeHeaderValue, KeepsSpacesStripsControls)
 {
@@ -100,7 +95,6 @@ TEST(SanitizeHeaderValue, KeepsSpacesStripsControls)
 	EXPECT_EQ(SanitizeHeaderValue(""), "");
 }
 
-// -- TryParseStatusCode ---------------------------------------------------
 
 TEST(TryParseStatusCode, ParsesCompleteStatusLine)
 {

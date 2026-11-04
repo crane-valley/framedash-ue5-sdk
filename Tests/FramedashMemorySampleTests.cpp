@@ -23,7 +23,7 @@ using Framedash::StaleMemoryKeysMask;
 
 TEST(MemorySampleTest, NoSourceEmitsNothing)
 {
-	FMemorySampleInputs In;  // bRhiValid=false, bLlmEnabled=false
+	FMemorySampleInputs In;
 	const FMemoryMetrics Out = SelectMemoryMetrics(In);
 	EXPECT_FALSE(Out.bHasVram);
 	EXPECT_FALSE(Out.bHasTextures);
@@ -33,7 +33,6 @@ TEST(MemorySampleTest, NoSourceEmitsNothing)
 
 TEST(MemorySampleTest, ValidRhiEmitsVramIncludingCollectedZero)
 {
-	// A valid RHI reporting 0 bytes in use is a collected 0 -- present, not absent.
 	FMemorySampleInputs In;
 	In.bRhiValid = true;
 	In.VramBytes = 0;
@@ -65,7 +64,6 @@ TEST(MemorySampleTest, UnavailableRhiLeavesVramAbsentEvenWithValue)
 
 TEST(MemorySampleTest, NegativeVramDefensivelyDropped)
 {
-	// Defensive: an int64-overflowed texture-stat sum (negative) is not emitted.
 	FMemorySampleInputs In;
 	In.bRhiValid = true;
 	In.VramBytes = -1;
@@ -89,7 +87,6 @@ TEST(MemorySampleTest, LlmDisabledEmitsNoCategoriesEvenWithAmounts)
 
 TEST(MemorySampleTest, LlmEnabledEmitsOnlyPositiveCategories)
 {
-	// A 0-amount tag is untracked/empty and stays absent; positive tags are emitted.
 	FMemorySampleInputs In;
 	In.bLlmEnabled = true;
 	In.TexturesBytes = 4096;
@@ -121,20 +118,16 @@ TEST(MemorySampleTest, VramAndCategoriesAreIndependent)
 	EXPECT_FALSE(Out.bHasAudio);
 }
 
-// -- CollectMemoryMetricEntries: the shared "which keys to attach" enumeration used
-//    by both the heartbeat and the position-qualified event-attach path. --
 
 TEST(MemoryMetricEntriesTest, EmptySampleEmitsNoEntries)
 {
-	FMemoryMetrics M;  // all bHas* false
+	FMemoryMetrics M;
 	FMemoryMetricEntry Entries[kMaxMemoryMetricEntries];
 	EXPECT_EQ(CollectMemoryMetricEntries(M, Entries), 0);
 }
 
 TEST(MemoryMetricEntriesTest, EnumeratesOnlyPresentKeysWithCanonicalNames)
 {
-	// vram + audio present, textures + meshes absent -> exactly two entries, with the
-	// canonical key names and values, and absent categories skipped.
 	FMemoryMetrics M;
 	M.bHasVram = true;
 	M.Vram = 4096;
@@ -180,12 +173,9 @@ TEST(MemoryMetricEntriesTest, KeyMacrosMatchConstants)
 	EXPECT_STREQ(Framedash::kMemKeyAudio, FRAMEDASH_MEM_KEY_AUDIO);
 }
 
-// -- SelectAttachableMemoryEntries: the caller-wins / caller-first-capacity rule for
-//    attaching cached mem.* onto position-qualified events (Codex round 2). --
 
 namespace
 {
-	// Four present entries, mirroring a full sample, for the attach-rule tests.
 	void MakeFourEntries(FMemoryMetricEntry (&Entries)[kMaxMemoryMetricEntries])
 	{
 		Entries[0] = FMemoryMetricEntry{"mem.vram", 1};
@@ -201,7 +191,7 @@ TEST(MemoryAttachTest, AmpleCapacityNoCallerKeysAttachesAll)
 	MakeFourEntries(Entries);
 	const bool CallerHasKey[kMaxMemoryMetricEntries] = {false, false, false, false};
 	FMemoryMetricEntry Out[kMaxMemoryMetricEntries];
-	const int Count = SelectAttachableMemoryEntries(Entries, 4, CallerHasKey, /*RemainingCapacity=*/8, Out);
+	const int Count = SelectAttachableMemoryEntries(Entries, 4, CallerHasKey,  8, Out);
 	ASSERT_EQ(Count, 4);
 	EXPECT_STREQ(Out[0].Key, "mem.vram");
 	EXPECT_STREQ(Out[3].Key, "mem.audio");
@@ -209,13 +199,11 @@ TEST(MemoryAttachTest, AmpleCapacityNoCallerKeysAttachesAll)
 
 TEST(MemoryAttachTest, ZeroRemainingCapacityAttachesNothing)
 {
-	// A caller that filled MaxMetricPairs leaves 0 capacity -> no mem.* attach, and by
-	// construction no caller metric was displaced (the caller loop ran first).
 	FMemoryMetricEntry Entries[kMaxMemoryMetricEntries];
 	MakeFourEntries(Entries);
 	const bool CallerHasKey[kMaxMemoryMetricEntries] = {false, false, false, false};
 	FMemoryMetricEntry Out[kMaxMemoryMetricEntries];
-	const int Count = SelectAttachableMemoryEntries(Entries, 4, CallerHasKey, /*RemainingCapacity=*/0, Out);
+	const int Count = SelectAttachableMemoryEntries(Entries, 4, CallerHasKey,  0, Out);
 	EXPECT_EQ(Count, 0);
 }
 
@@ -228,7 +216,7 @@ TEST(MemoryAttachTest, CallerSetKeysAreSkippedWithoutConsumingCapacity)
 	MakeFourEntries(Entries);
 	const bool CallerHasKey[kMaxMemoryMetricEntries] = {true, false, true, false};
 	FMemoryMetricEntry Out[kMaxMemoryMetricEntries];
-	const int Count = SelectAttachableMemoryEntries(Entries, 4, CallerHasKey, /*RemainingCapacity=*/2, Out);
+	const int Count = SelectAttachableMemoryEntries(Entries, 4, CallerHasKey,  2, Out);
 	ASSERT_EQ(Count, 2);
 	EXPECT_STREQ(Out[0].Key, "mem.textures");
 	EXPECT_STREQ(Out[1].Key, "mem.audio");
@@ -236,17 +224,15 @@ TEST(MemoryAttachTest, CallerSetKeysAreSkippedWithoutConsumingCapacity)
 
 TEST(MemoryAttachTest, RemainingCapacityLimitsAttachInOrder)
 {
-	// Only one slot left -> only the first non-caller-set entry attaches, in order.
 	FMemoryMetricEntry Entries[kMaxMemoryMetricEntries];
 	MakeFourEntries(Entries);
 	const bool CallerHasKey[kMaxMemoryMetricEntries] = {false, false, false, false};
 	FMemoryMetricEntry Out[kMaxMemoryMetricEntries];
-	const int Count = SelectAttachableMemoryEntries(Entries, 4, CallerHasKey, /*RemainingCapacity=*/1, Out);
+	const int Count = SelectAttachableMemoryEntries(Entries, 4, CallerHasKey,  1, Out);
 	ASSERT_EQ(Count, 1);
 	EXPECT_STREQ(Out[0].Key, "mem.vram");
 }
 
-// -- Presence-mask diff: drives the heartbeat's steady-state-zero-alloc map update. --
 
 TEST(MemoryMaskTest, PresenceMaskReflectsPresentCategories)
 {
@@ -272,8 +258,6 @@ TEST(MemoryMaskTest, UnchangedKeySetHasNoStaleKeys)
 
 TEST(MemoryMaskTest, StaleKeysAreThosePresentBeforeButGoneNow)
 {
-	// Was vram+textures+meshes, now vram only -> textures+meshes are stale (removed);
-	// vram (still present) is not stale.
 	const uint32_t Prev = Framedash::kMemBitVram | Framedash::kMemBitTextures | Framedash::kMemBitMeshes;
 	const uint32_t Curr = Framedash::kMemBitVram;
 	EXPECT_EQ(StaleMemoryKeysMask(Prev, Curr), Framedash::kMemBitTextures | Framedash::kMemBitMeshes);
@@ -281,8 +265,6 @@ TEST(MemoryMaskTest, StaleKeysAreThosePresentBeforeButGoneNow)
 
 TEST(MemoryMaskTest, NewlyPresentKeysAreNotStale)
 {
-	// A key that appears now (audio) but was absent before is NOT stale -- it is a new
-	// Add, not a Remove.
 	const uint32_t Prev = Framedash::kMemBitVram;
 	const uint32_t Curr = Framedash::kMemBitVram | Framedash::kMemBitAudio;
 	EXPECT_EQ(StaleMemoryKeysMask(Prev, Curr), 0u);

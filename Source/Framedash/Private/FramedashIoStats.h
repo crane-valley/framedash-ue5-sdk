@@ -37,9 +37,6 @@
 
 namespace Framedash
 {
-	// A snapshot of the monotonic cumulative counters (or a computed window delta
-	// between two snapshots). Mirrors the three io.* metric keys: io.read_bytes,
-	// io.read_time_ms, io.read_ops.
 	struct FIoSnapshot
 	{
 		int64_t ReadBytes = 0;
@@ -93,7 +90,6 @@ namespace Framedash
 			}
 		}
 
-		// Count completed read operations. A non-positive count is dropped.
 		void AddOps(int64_t Count)
 		{
 			if (Count > 0)
@@ -188,9 +184,6 @@ namespace Framedash
 		return ThreadReadSuppressionDepth() > 0;
 	}
 
-	// RAII guard that suppresses read metering on the current thread for its
-	// lifetime (nestable). Cheap when disk-IO tracking is off -- it only
-	// increments/decrements a thread-local int.
 	class FIoMeteringSuppressionScope
 	{
 	public:
@@ -200,4 +193,4 @@ namespace Framedash
 		FIoMeteringSuppressionScope(const FIoMeteringSuppressionScope&) = delete;
 		FIoMeteringSuppressionScope& operator=(const FIoMeteringSuppressionScope&) = delete;
 	};
-} // namespace Framedash
+}

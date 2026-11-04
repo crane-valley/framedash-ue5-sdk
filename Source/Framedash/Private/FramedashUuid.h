@@ -40,16 +40,6 @@ private:
 	uint64_t S[4]{};
 };
 
-// Pack a UUIDv7 (RFC 9562) from a millisecond timestamp and 128 bits
-// of random material. Bit layout (most significant bit first):
-//   bits   0..47  unix_ts_ms (input is truncated to 48 bits)
-//   bits  48..51  ver = 0x7
-//   bits  52..63  rand_a (12 bits, taken from R1[0..11])
-//   bits  64..65  var = 0b10
-//   bits  66..127 rand_b (62 bits)
-// Of R1 the low 26 bits are consumed (12 for rand_a, 14 for rand_b
-// high). Of R2 the low 32 bits and bits 32..47 are consumed (32+16
-// for rand_b mid/low). Remaining input bits are ignored.
 FUuidFields PackUuidV7(uint64_t UnixTsMs, uint64_t R1, uint64_t R2);
 
-} // namespace Framedash
+}

@@ -34,36 +34,10 @@ namespace
 		return true;
 	}
 
-	// The userinfo-stripped authority ("host", "host:port", "[v6]", or
-	// "[v6]:port"). Same bounding rules as ExtractUrlHost (scheme up to "://",
-	// authority up to the first of "/?#\\", userinfo up to the last '@') so the
-	// host and port halves are parsed consistently with the security check.
-	std::string_view PlannerExtractAuthority(std::string_view Url)
-	{
-		const std::size_t SchemeEnd = Url.find("://");
-		std::string_view Remainder =
-			(SchemeEnd == std::string_view::npos) ? Url : Url.substr(SchemeEnd + 3);
-
-		const std::size_t AuthorityEnd = Remainder.find_first_of("/?#\\");
-		std::string_view Authority = (AuthorityEnd == std::string_view::npos)
-			? Remainder
-			: Remainder.substr(0, AuthorityEnd);
-
-		const std::size_t AtIndex = Authority.find_last_of('@');
-		if (AtIndex != std::string_view::npos)
-		{
-			Authority = Authority.substr(AtIndex + 1);
-		}
-		return Authority;
-	}
-
-	// Explicit port digits, or empty when none is present. Empty is also
-	// returned for a malformed IPv6 authority; the caller distinguishes
-	// "absent" (default) from "present but invalid" via HasExplicitPort.
 	std::string_view ExtractExplicitPort(std::string_view Url, bool& bOutHasExplicitPort)
 	{
 		bOutHasExplicitPort = false;
-		std::string_view Authority = PlannerExtractAuthority(Url);
+		std::string_view Authority = ExtractUrlAuthority(Url);
 		if (Authority.empty())
 		{
 			return {};
@@ -186,7 +160,7 @@ FAddressPlan BuildAddressPlan(
 	FAddressPlan Plan;
 	if (!ShouldForceAddressFamily(EndpointUrl))
 	{
-		return Plan; // passthrough
+		return Plan;
 	}
 
 	// IPv4 first, IPv6 second -- see FAddressPlan for the ordering rationale.
@@ -200,7 +174,7 @@ FAddressPlan BuildAddressPlan(
 	}
 	if (Plan.Attempts.empty())
 	{
-		return Plan; // nothing resolved -> passthrough
+		return Plan;
 	}
 
 	Plan.HostHeader = HostHeaderValue(EndpointUrl);

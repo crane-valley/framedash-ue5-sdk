@@ -66,7 +66,7 @@ bool FlushOutgoing(BIO* WriteBio, FSocket& Socket, double Deadline)
 		const int Pending = BIO_read(WriteBio, Buffer, static_cast<int>(sizeof(Buffer)));
 		if (Pending <= 0)
 		{
-			return true; // memory BIO empty -- nothing (more) to send
+			return true;
 		}
 		int32 Offset = 0;
 		while (Offset < Pending)
@@ -107,7 +107,7 @@ bool PumpIncoming(BIO* ReadBio, FSocket& Socket, double Deadline)
 	int32 BytesRead = 0;
 	if (!Socket.Recv(Buffer, static_cast<int32>(sizeof(Buffer)), BytesRead) || BytesRead <= 0)
 	{
-		return false; // error or orderly close
+		return false;
 	}
 	return BIO_write(ReadBio, Buffer, BytesRead) == BytesRead;
 }
@@ -148,8 +148,6 @@ bool SslWriteAll(SSL* Ssl, BIO* ReadBio, BIO* WriteBio, FSocket& Socket,
 	return true;
 }
 
-// TLS handshake + request + status-line read over an already-connected
-// socket. Returns the HTTP status code or 0 on any failure.
 int32 RunTlsPost(SSL* Ssl, BIO* ReadBio, BIO* WriteBio, FSocket& Socket,
 	const std::string& Head, const TArray<uint8>& Payload, double Deadline,
 	const TCHAR*& OutFailStage)
@@ -203,10 +201,9 @@ int32 RunTlsPost(SSL* Ssl, BIO* ReadBio, BIO* WriteBio, FSocket& Socket,
 		return 0;
 	}
 
-	// Read until the status line is complete. The response head is tiny
-	// (status line + a few headers); 1 KiB is ample to capture the status
-	// line, which is all the retry classification needs. "Connection: close"
-	// was sent with the request, so not draining the rest is fine.
+	// The response head is tiny (status line + a few headers); 1 KiB is ample to capture the
+	// status line, which is all the retry classification needs. "Connection: close" was sent with
+	// the request, so not draining the rest is fine.
 	char Response[1024];
 	int32 Total = 0;
 	while (Total < static_cast<int32>(sizeof(Response)))
@@ -246,7 +243,7 @@ int32 RunTlsPost(SSL* Ssl, BIO* ReadBio, BIO* WriteBio, FSocket& Socket,
 		}
 		else
 		{
-			OutFailStage = TEXT("response-tls"); // close/error before a parseable status line
+			OutFailStage = TEXT("response-tls");
 			return 0;
 		}
 	}
@@ -254,7 +251,7 @@ int32 RunTlsPost(SSL* Ssl, BIO* ReadBio, BIO* WriteBio, FSocket& Socket,
 	return 0;
 }
 
-} // anonymous namespace
+}
 
 namespace FramedashDirectSocket
 {
@@ -313,7 +310,7 @@ TSharedPtr<const Framedash::FAddressPlan, ESPMode::ThreadSafe> AcquirePlan(
 		{
 			FScopeLock ScopeLock(&Cache->Lock);
 			Cache->bResolveInFlight = false;
-			return nullptr; // non-final: a later flush retries
+			return nullptr;
 		}
 
 		const std::string HostUtf8 = Framedash::ExtractUrlHost(Url);
@@ -326,8 +323,6 @@ TSharedPtr<const Framedash::FAddressPlan, ESPMode::ThreadSafe> AcquirePlan(
 		Sockets->GetAddressInfoAsync(
 			[CacheForCallback, UrlForCallback](FAddressInfoResult Result)
 			{
-				// One query returns BOTH families (A + AAAA); the planner
-				// orders IPv4 first.
 				std::string ResolvedIPv4;
 				std::string ResolvedIPv6;
 				for (const auto& Data : Result.Results)
@@ -404,9 +399,6 @@ int32 PostBlocking(
 	double TimeoutSeconds,
 	ISslCertificateManager& CertificateManager)
 {
-	// Failure-stage note for the diagnostics log below: which step of the
-	// attempt failed. Purely observational -- the return contract stays
-	// "status 0 on any transport-level failure".
 	const TCHAR* FailStage = TEXT("");
 
 	if (AttemptIndex < 0 || AttemptIndex >= static_cast<int32>(Plan.Attempts.size()))
@@ -532,10 +524,9 @@ int32 PostBlocking(
 			FailStage = TEXT("bio-new");
 			break;
 		}
-		// An empty memory BIO must report "retry" (WANT_READ), not EOF.
 		BIO_set_mem_eof_return(ReadBio, -1);
 		BIO_set_mem_eof_return(WriteBio, -1);
-		SSL_set_bio(Ssl, ReadBio, WriteBio); // ownership moves to Ssl
+		SSL_set_bio(Ssl, ReadBio, WriteBio);
 		SSL_set_connect_state(Ssl);
 
 		// TLS 1.2 floor (the ingest edge negotiates 1.2/1.3), full peer
@@ -567,7 +558,7 @@ int32 PostBlocking(
 
 	if (Ssl != nullptr)
 	{
-		SSL_free(Ssl); // frees the BIOs it owns
+		SSL_free(Ssl);
 	}
 	if (SslContext != nullptr)
 	{
@@ -578,8 +569,6 @@ int32 PostBlocking(
 
 	if (StatusCode == 0)
 	{
-		// Diagnostics only (supportability): which stage the attempt died at.
-		// Includes the OpenSSL error string when one is queued (TLS stages).
 		const unsigned long SslError = ERR_peek_last_error();
 		char SslErrorText[256] = {0};
 		if (SslError != 0)
@@ -606,6 +595,6 @@ int32 PostBlocking(
 	return StatusCode;
 }
 
-} // namespace FramedashDirectSocket
+}
 
-#endif // FRAMEDASH_WITH_DIRECT_SOCKET_TLS
+#endif

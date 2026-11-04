@@ -32,6 +32,9 @@ private:
 	bool CanFetchHeatmap() const;
 	bool CanFrameHeatmap() const;
 	bool CanStartRequest() const;
+	static TSharedPtr<int32> FindIntegerOption(
+		const TArray<TSharedPtr<int32>>& Options,
+		int32 Value);
 
 	TSharedRef<SWidget> GenerateMapWidget(TSharedPtr<FramedashEditor::FMapInfo> Map) const;
 	TSharedRef<SWidget> GenerateIntegerWidget(TSharedPtr<int32> Value) const;

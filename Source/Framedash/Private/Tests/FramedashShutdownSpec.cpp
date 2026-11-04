@@ -164,7 +164,6 @@ void FFramedashShutdownDurabilitySpec::Define()
 		{
 			GetMutableDefault<UFramedashSettings>()->bEnableOfflineQueue = true;
 
-			// Seed three durable events on disk before any subsystem exists.
 			TArray<FFramedashEvent> Seed;
 			for (int32 Index = 0; Index < 3; ++Index)
 			{
@@ -217,4 +216,4 @@ void FFramedashShutdownDurabilitySpec::Define()
 	});
 }
 
-#endif // WITH_DEV_AUTOMATION_TESTS
+#endif

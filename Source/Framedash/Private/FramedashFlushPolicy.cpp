@@ -36,4 +36,4 @@ bool FFlushPolicy::ShouldFlush(bool bFlushRequested, float ElapsedSeconds) const
 	return bFlushRequested || ElapsedSeconds >= FlushIntervalSeconds;
 }
 
-} // namespace Framedash
+}

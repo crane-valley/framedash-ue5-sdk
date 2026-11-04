@@ -11,10 +11,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
+# Pinned to the commit v1.15.2 points at, not the tag: a tag can be moved or
+# re-pointed upstream, and this CMake code is fetched and executed on the
+# self-hosted runner and on the release host (scripts/package-ue5-plugin.ps1
+# gates packaging on this harness), so it must resolve to immutable bytes.
 FetchContent_Declare(
 	googletest
 	GIT_REPOSITORY https://github.com/google/googletest.git
-	GIT_TAG        v1.15.2
+	GIT_TAG        b514bdc898e2951020cbdca1304b75f5950d1f59
 )
 
 if(WIN32)
@@ -67,7 +71,27 @@ target_include_directories(framedash_ue5_tests PRIVATE
 )
 target_link_libraries(framedash_ue5_tests PRIVATE GTest::gtest_main)
 
-if(MSVC)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+	target_compile_options(framedash_ue5_tests PRIVATE
+		$<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /utf-8 /clang:-fprofile-instr-generate /clang:-fcoverage-mapping>
+		$<$<COMPILE_LANGUAGE:C>:/utf-8 /clang:-fprofile-instr-generate /clang:-fcoverage-mapping>
+	)
+	execute_process(
+		COMMAND "${CMAKE_CXX_COMPILER}" /clang:-print-resource-dir
+		RESULT_VARIABLE CLANG_RESOURCE_DIR_RESULT
+		OUTPUT_VARIABLE CLANG_RESOURCE_DIR
+		ERROR_VARIABLE CLANG_RESOURCE_DIR_ERROR
+		OUTPUT_STRIP_TRAILING_WHITESPACE
+	)
+	if(NOT CLANG_RESOURCE_DIR_RESULT EQUAL 0 OR CLANG_RESOURCE_DIR STREQUAL "")
+		message(FATAL_ERROR "clang-cl could not resolve its resource directory: ${CLANG_RESOURCE_DIR_ERROR}")
+	endif()
+	set(CLANG_PROFILE_RUNTIME "${CLANG_RESOURCE_DIR}/lib/windows/clang_rt.profile-x86_64.lib")
+	if(NOT EXISTS "${CLANG_PROFILE_RUNTIME}")
+		message(FATAL_ERROR "Clang x64 profile runtime not found at ${CLANG_PROFILE_RUNTIME}")
+	endif()
+	target_link_libraries(framedash_ue5_tests PRIVATE "${CLANG_PROFILE_RUNTIME}")
+elseif(MSVC)
 	target_compile_options(framedash_ue5_tests PRIVATE
 		$<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /utf-8>
 		$<$<COMPILE_LANGUAGE:C>:/utf-8>
@@ -78,13 +102,18 @@ else()
 	)
 endif()
 
+if(MSVC OR (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_C_SIMULATE_ID STREQUAL "MSVC"))
+	set(THIRD_PARTY_WARNING_OPTION /w)
+else()
+	set(THIRD_PARTY_WARNING_OPTION -w)
+endif()
+
 set_source_files_properties(
 	${PLUGIN_PROTO_DIR}/telemetry.pb.c
 	${PLUGIN_NANOPB_DIR}/pb_common.c
 	${PLUGIN_NANOPB_DIR}/pb_decode.c
 	${PLUGIN_NANOPB_DIR}/pb_encode.c
-	PROPERTIES
-		COMPILE_OPTIONS "$<$<C_COMPILER_ID:MSVC>:/w>;$<$<NOT:$<C_COMPILER_ID:MSVC>>:-w>"
+	PROPERTIES COMPILE_OPTIONS "${THIRD_PARTY_WARNING_OPTION}"
 )
 
 gtest_discover_tests(framedash_ue5_tests)

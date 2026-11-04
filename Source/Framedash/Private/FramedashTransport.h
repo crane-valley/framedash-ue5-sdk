@@ -9,6 +9,16 @@
 
 using FFramedashBatchFailureHandler = TFunction<void(TArray<FFramedashEvent>&&, int32)>;
 using FFramedashBatchClosedHandler = TFunction<void(int32)>;
+// Invoked when a batch is permanently dropped WITHOUT delivery and WITHOUT being
+// queued for retry: an insecure endpoint, a serialization failure, a cross-origin
+// redirect, or a non-retryable/poison HTTP status (e.g. 401 invalid key, 4xx, or a
+// 413 that cannot be split). This is distinct from OnTransientFailure (events
+// persisted for retry) and from OnClosed on the success path -- both success and a
+// poison-drop otherwise close with the full event count, so a caller cannot tell them
+// apart from OnClosed alone. A synchronous FlushBlocking uses this to report that
+// delivery was NOT confirmed even though the batch closed. It does NOT change the
+// poison-drop policy: the events are still dropped, this only surfaces that fact.
+using FFramedashBatchDroppedHandler = TFunction<void(int32 DroppedCount)>;
 
 #if FRAMEDASH_WITH_DIRECT_SOCKET_TLS
 struct FFramedashPlanCache;
@@ -16,11 +26,8 @@ class ISslCertificateManager;
 #endif
 
 /**
- * Handles Protobuf serialization, gzip compression, and HTTP transport
- * for sending telemetry batches to the Framedash ingest endpoint.
- *
- * Serialization and compression run on a background thread pool to avoid
- * blocking the game thread. HTTP dispatch is posted back to the game thread.
+ * Normal serialization and compression run on a background thread pool to avoid blocking the
+ * game thread. Their result crosses through a transport-owned queue.
  */
 class FFramedashTransport
 {
@@ -28,16 +35,36 @@ public:
 	FFramedashTransport(const FString& InEndpointUrl, const FString& InApiKey);
 	~FFramedashTransport();
 
-	/**
-	 * Serialize, compress, and send a batch of events via HTTP POST.
-	 * CPU-heavy work (protobuf + gzip) runs on a thread pool;
-	 * HTTP request is dispatched on the game thread.
-	 * Takes events by value — caller should use MoveTemp().
-	 */
+	// bSynchronous: when true the serialize + gzip + HTTP-dispatch runs INLINE on the
+	// calling (game) thread instead of using the background pool and pending-dispatch
+	// queue. Every HTTP completion is isolated onto the HTTP thread and recorded for
+	// DrainCompletedRequests(), regardless of this outbound-dispatch choice, so a blocked
+	// game thread never drains shared engine queues. The HTTP round-trip itself remains
+	// asynchronous. Scheduled retries remain ticker-driven and are not driven by the pump.
 	void SendBatch(
 		TArray<FFramedashEvent> Events,
 		FFramedashBatchFailureHandler OnTransientFailure = FFramedashBatchFailureHandler(),
-		FFramedashBatchClosedHandler OnClosed = FFramedashBatchClosedHandler());
+		FFramedashBatchClosedHandler OnClosed = FFramedashBatchClosedHandler(),
+		FFramedashBatchDroppedHandler OnDropped = FFramedashBatchDroppedHandler(),
+		bool bSynchronous = false,
+		double DeadlineSeconds = TNumericLimits<double>::Max());
+
+	void DrainPendingDispatches();
+
+	void DrainCompletedRequests();
+
+#if WITH_DEV_AUTOMATION_TESTS && FRAMEDASH_WITH_AUTOMATION_SPECS
+	// The dead-loopback spec cannot assert delivery, so these counters prove that the
+	// async outbound path registers with and is applied by the isolated queue.
+	int32 GetRegisteredCompletionCountForTesting() const
+	{
+		return RegisteredCompletionCountForTesting;
+	}
+	int32 GetAppliedCompletionCountForTesting() const
+	{
+		return AppliedCompletionCountForTesting;
+	}
+#endif
 
 	// EndpointUrl and ApiKey are intentionally immutable after construction (no
 	// setters). The owner (FramedashSubsystem) recreates the transport to change
@@ -46,11 +73,17 @@ public:
 	// the request is actually sent to provably the same value for the transport's
 	// whole lifetime.
 
+	/**
+	 * Whether sending is enabled: the cached endpoint-security verdict. False means
+	 * every batch is dropped (fail closed), so a synchronous FlushBlocking must
+	 * report failure immediately instead of pumping for a delivery that can never
+	 * happen.
+	 */
+	bool IsEndpointSecure() const { return bEndpointSecure; }
+
 private:
-	/** Serialize events to Protobuf binary using nanopb. Pure function — thread-safe. */
 	static bool SerializeToProtobuf(const TArray<FFramedashEvent>& Events, TArray<uint8>& OutBytes);
 
-	/** Compress data using gzip. Pure function — thread-safe. */
 	static bool CompressGzip(const TArray<uint8>& InData, TArray<uint8>& OutCompressed);
 
 	/**
@@ -66,17 +99,11 @@ private:
 		int32 RetryCount,
 		int32 FamilyIndex,
 		bool bIsCompressed,
+		bool bSynchronous,
 		FFramedashBatchFailureHandler OnTransientFailure,
-		FFramedashBatchClosedHandler OnClosed);
+		FFramedashBatchClosedHandler OnClosed,
+		FFramedashBatchDroppedHandler OnDropped = FFramedashBatchDroppedHandler());
 
-	/**
-	 * Shared classification tail for both delivery paths: runs the retry
-	 * policy on StatusCode and performs the success / retry / split / fail
-	 * bookkeeping. ResponseSnippet is a body excerpt for logs (empty for the
-	 * direct-socket fallback, which only parses the status line) and
-	 * bHasResponse says whether a real HTTP response backs it. Game thread
-	 * only.
-	 */
 	void HandleResponseOutcome(
 		int32 StatusCode,
 		const FString& ResponseSnippet,
@@ -86,35 +113,30 @@ private:
 		int32 RetryCount,
 		int32 FamilyIndex,
 		bool bIsCompressed,
+		bool bSynchronous,
 		FFramedashBatchFailureHandler OnTransientFailure,
-		FFramedashBatchClosedHandler OnClosed);
+		FFramedashBatchClosedHandler OnClosed,
+		FFramedashBatchDroppedHandler OnDropped = FFramedashBatchDroppedHandler());
 
 #if FRAMEDASH_WITH_DIRECT_SOCKET_TLS
 	/**
-	 * Lazily load the engine SSL module and decide whether the direct-socket
-	 * fallback may engage (trust roots available, endpoint domain not
-	 * key-pinned -- the fallback must never bypass a game's pinning config).
-	 * Game thread only; the verdict is cached after the first call.
+	 * The direct-socket fallback must have trust roots and must not bypass a game's endpoint
+	 * pinning configuration.
 	 */
 	bool EnsureSslReady();
 
-	/**
-	 * Launch the direct-socket TLS fallback for one attempt on a background
-	 * thread (resolve-with-cache + pinned-family POST), then hop back to the
-	 * game thread and classify its status code exactly like a primary
-	 * response. Game thread only (dispatch); never blocks it.
-	 */
 	void StartDirectSocketFallback(
 		TSharedRef<TArray<uint8>, ESPMode::ThreadSafe> Payload,
 		TSharedRef<TArray<FFramedashEvent>, ESPMode::ThreadSafe> Events,
 		int32 RetryCount,
 		int32 FamilyIndex,
 		bool bIsCompressed,
+		bool bSynchronous,
 		FFramedashBatchFailureHandler OnTransientFailure,
-		FFramedashBatchClosedHandler OnClosed);
+		FFramedashBatchClosedHandler OnClosed,
+		FFramedashBatchDroppedHandler OnDropped = FFramedashBatchDroppedHandler());
 #endif
 
-	/** Validate that the endpoint URL uses HTTPS (localhost exemption). */
 	bool ValidateEndpointSecurity() const;
 
 	/**
@@ -127,10 +149,53 @@ private:
 	void SplitBatchAndResend(
 		TArray<FFramedashEvent> Events,
 		FFramedashBatchFailureHandler OnTransientFailure,
-		FFramedashBatchClosedHandler OnClosed);
+		FFramedashBatchClosedHandler OnClosed,
+		FFramedashBatchDroppedHandler OnDropped = FFramedashBatchDroppedHandler(),
+		bool bSynchronous = false,
+		double DeadlineSeconds = TNumericLimits<double>::Max());
+
+	struct FPendingDispatchQueue
+	{
+		TArray<TFunction<void()>> Dispatches;
+		FCriticalSection CS;
+	};
+
+	/**
+	 * Keep background results out of the process-global task graph without requiring the
+	 * transport itself to outlive the producer.
+	 */
+	static void EnqueuePendingDispatch(
+		const TSharedRef<FPendingDispatchQueue, ESPMode::ThreadSafe>& Queue,
+		TFunction<void()> Dispatch);
+
+	struct FPendingCompletion
+	{
+		std::atomic<bool> bComplete{false};
+
+		int32 StatusCode = 0;
+		int32 NextFamilyIndex = 0;
+		bool bHasResponse = false;
+		FString ResponseSnippet;
+		FString EffectiveUrl;
+
+		TFunction<void(FPendingCompletion&)> Continue;
+	};
 
 	FString EndpointUrl;
 	FString ApiKey;
+
+	// A worker may finish between the destructor's AliveFlag store and its enqueue. Shared
+	// ownership keeps only the inert queue alive, so that race never dereferences `this`.
+	TSharedRef<FPendingDispatchQueue, ESPMode::ThreadSafe> PendingDispatchQueue =
+		MakeShared<FPendingDispatchQueue, ESPMode::ThreadSafe>();
+
+	TArray<TSharedRef<FPendingCompletion, ESPMode::ThreadSafe>> PendingCompletions;
+	FCriticalSection PendingCompletionsCS;
+
+#if WITH_DEV_AUTOMATION_TESTS && FRAMEDASH_WITH_AUTOMATION_SPECS
+	int32 RegisteredCompletionCountForTesting = 0;
+	int32 AppliedCompletionCountForTesting = 0;
+#endif
 
 	/**
 	 * Cached result of ValidateEndpointSecurity(), computed once in the
@@ -141,12 +206,6 @@ private:
 	bool bEndpointSecure = false;
 
 #if FRAMEDASH_WITH_DIRECT_SOCKET_TLS
-	/**
-	 * Whether the endpoint qualifies for the prefer-IPv4-with-IPv6-fallback
-	 * direct-socket path at all (remote HTTPS hostname; loopback / IP-literal
-	 * / non-HTTPS endpoints pass through). Computed once in the constructor
-	 * (EndpointUrl is immutable).
-	 */
 	bool bFallbackEligible = false;
 
 	/** One-shot EnsureSslReady latch + verdict (game thread only). */
@@ -173,11 +232,8 @@ private:
 #endif
 
 	/**
-	 * Shared flag to detect Transport destruction in async callbacks.
-	 * Lambdas capture this by value (shared ownership keeps the atomic alive
-	 * even after the Transport is deleted). Set to false in destructor.
-	 * std::atomic<bool> for safe cross-thread reads/writes of the flag itself;
-	 * ESPMode::ThreadSafe for safe cross-thread reference counting of the TSharedPtr.
+	 * Callbacks can outlive Transport. Shared ownership keeps the alive flag valid; atomic access
+	 * and thread-safe reference counting protect its two separate cross-thread lifetimes.
 	 */
 	TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> AliveFlag;
 };

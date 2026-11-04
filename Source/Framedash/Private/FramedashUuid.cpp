@@ -13,7 +13,7 @@ constexpr uint64_t Rotl(uint64_t X, int K)
 	return (X << K) | (X >> (64 - K));
 }
 
-} // namespace
+}
 
 void FXoshiro256pp::Seed(uint64_t S0, uint64_t S1, uint64_t S2, uint64_t S3)
 {
@@ -57,4 +57,4 @@ FUuidFields PackUuidV7(uint64_t UnixTsMs, uint64_t R1, uint64_t R2)
 	return U;
 }
 
-} // namespace Framedash
+}

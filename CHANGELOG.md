@@ -6,6 +6,42 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-11-05
+
+### Added
+
+- `FlushBlocking(TimeoutMs)`: a Blueprint-callable synchronous flush that blocks
+  the game thread, up to `TimeoutMs` (clamped to 30000 ms), until every event
+  buffered at call time -- including offline-queue-restored events and any batch
+  already in flight -- is confirmed delivered. Intended for safe pause points
+  (level end, checkpoint, pre-quit) where a short block is acceptable to guarantee
+  delivery instead of relying on the periodic 30s flush. The blocking wait is
+  transport-isolated: background serialization dispatches, primary HTTP results,
+  and direct-socket fallback results enter thread-safe transport queues drained on
+  the game thread. This includes async-cadence work still serializing when the wait
+  begins, without ticking UE's process-global HTTP manager or draining the shared
+  game-thread task graph. Blocking serialize/gzip work is pre-split to an estimated
+  1 MiB per chunk and checks the shared deadline between CPU units. Returns `true` only when
+  everything was delivered (or there was nothing to send); returns `false` on
+  timeout, a send failure that left events queued for retry, a non-positive
+  `TimeoutMs`, when the SDK is uninitialized or sending is disabled
+  (endpoint-security fail-closed), or when called off the game thread. On any
+  `false` outcome the undelivered events remain buffered, persisted, or tracked in
+  flight. Queue-off timeouts do not create a speculative retry copy: the eventual
+  success, transient failure, or permanent rejection remains authoritative. The SDK
+  keeps operating normally and stays fail-safe (never throws or crashes).
+
+### Fixed
+
+- `FlushBlocking` now stops dispatching later waves after an earlier wave fails,
+  preserving the offline queue's positional acknowledgement invariant, and uses a
+  conservative UTF-8 byte estimate -- covering per-event string fields as well as
+  attribute/metric entries -- when bounding non-ASCII serialize/gzip chunks.
+  Exact nanopb sizing now also accommodates legal attribute-heavy UTF-8 split children
+  instead of treating them as permanent serialization drops. A delivery confirmed
+  only after the budget elapsed is still acknowledged (never resent) but now
+  reports `false`, so `true` strictly means confirmed within the budget.
+
 ## [0.1.13] - 2026-07-24
 
 ### Added

@@ -23,14 +23,12 @@
 
 namespace Framedash
 {
-	/** Address family for a delivery attempt. */
 	enum class EIpFamily
 	{
 		IPv4,
 		IPv6,
 	};
 
-	/** One direct-socket connect candidate: a resolved, unbracketed IP literal. */
 	struct FAddressAttempt
 	{
 		EIpFamily Family = EIpFamily::IPv4;
@@ -51,36 +49,28 @@ namespace Framedash
 	struct FAddressPlan
 	{
 		std::vector<FAddressAttempt> Attempts;
-		/** Host header value: "host" or "host:port" for a non-default port. */
 		std::string HostHeader;
-		/** FQDN used for BOTH SNI and certificate hostname verification. */
 		std::string CommonName;
-		/** Origin-form request target (path + query, leading '/'). */
 		std::string RequestTarget;
-		/** TCP port to connect to (443 unless the URL carries an explicit port). */
 		int Port = 443;
 
 		bool IsPassthrough() const { return Attempts.empty(); }
 	};
 
 	/**
-	 * Whether the direct-socket fallback applies to this endpoint at all. Only
-	 * real remote HTTPS hostnames benefit; loopback / IP-literal / non-HTTPS
-	 * endpoints (plain HTTP is already loopback-only per EndpointSecurity) pass
-	 * through unchanged so local dev and self-hosted-by-IP deployments keep
-	 * working. Also rejects URLs containing control characters, '@', or '\'
-	 * (the same libcurl host-parsing differentials IsEndpointSecure rejects)
-	 * and an explicit-but-invalid port.
+	 * Only real remote HTTPS hostnames benefit; loopback / IP-literal / non-HTTPS endpoints (plain
+	 * HTTP is already loopback-only per EndpointSecurity) pass through unchanged so local dev and
+	 * self-hosted-by-IP deployments keep working. Also rejects URLs containing control characters,
+	 * '@', or '\' (the same libcurl host-parsing differentials IsEndpointSecure rejects) and an
+	 * explicit-but-invalid port.
 	 */
 	bool ShouldForceAddressFamily(std::string_view EndpointUrl);
 
 	/**
-	 * Build the delivery plan. ResolvedIPv4 / ResolvedIPv6 are the first
-	 * resolved address of each family (empty when that family did not resolve;
-	 * IPv6 accepted with or without brackets and stored unbracketed). Returns a
-	 * passthrough plan when the endpoint does not qualify or neither family
-	 * resolved, so the caller falls back to the engine HTTP stack rather than
-	 * dropping the batch.
+	 * ResolvedIPv4 / ResolvedIPv6 are the first resolved address of each family (empty when that
+	 * family did not resolve; IPv6 accepted with or without brackets and stored unbracketed).
+	 * Returns a passthrough plan when the endpoint does not qualify or neither family resolved, so
+	 * the caller falls back to the engine HTTP stack rather than dropping the batch.
 	 */
 	FAddressPlan BuildAddressPlan(
 		std::string_view EndpointUrl,
@@ -101,15 +91,7 @@ namespace Framedash
 	/** "host" for the default HTTPS port, otherwise "host:port". Empty when unparseable. */
 	std::string HostHeaderValue(std::string_view EndpointUrl);
 
-	/**
-	 * Origin-form request target (path + query, fragment dropped, leading '/'
-	 * enforced). "/" when the URL has no path.
-	 */
 	std::string ExtractRequestTarget(std::string_view EndpointUrl);
 
-	/**
-	 * Explicit port when present and valid (1..65535), 443 when absent, -1 when
-	 * an explicit port is present but malformed (non-numeric / out of range).
-	 */
 	int ExtractPortOrDefault(std::string_view EndpointUrl);
 }

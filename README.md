@@ -2,6 +2,12 @@
 
 Unreal Engine 5 plugin for collecting game telemetry and sending it to the Framedash platform.
 
+## Use cases
+
+- **Game telemetry:** capture custom gameplay events, world positions, automatic performance metrics, and build/session metadata.
+- **Heatmap analytics:** explore cloud-aggregated player and performance hotspots in the Framedash dashboard or directly in the Unreal Editor level viewport. UE5 maps are Z-up (the default) and the UE5 editor does not draw Y-up maps (the heatmap API answers 409 there).
+- **Performance regression CI:** label automated runs by build, compare candidates with `framedash perf-diff`, and fail CI when a configured regression threshold is exceeded.
+
 ## Requirements
 
 - Unreal Engine 5.3 or newer. This is a source plugin that compiles against the Unreal Engine version of your project. Release zips are published per engine version (`-ue5.3` ... `-ue5.8`) with `EngineVersion` pinned and prebuilt Win64 editor binaries -- install the zip matching your engine. Building from the repository source instead works on any supported 5.x (the source descriptor does not pin `EngineVersion`). Build-verified on UE 5.3, 5.4, 5.5, and 5.6. Note: the credential-leaking cross-origin redirect detection in the transport requires `IHttpBase::GetEffectiveURL` (UE 5.4+); on UE 5.3 that one defense is compiled out, and the rest of the SDK is unaffected.
@@ -305,7 +311,7 @@ A per-event attribute with the same key overrides the session value.
 
 If your CI harness exports the standard Framedash variables (`FRAMEDASH_BUILD_ID`,
 `FRAMEDASH_GIT_BRANCH`, `FRAMEDASH_GIT_COMMIT`, `FRAMEDASH_TEST_SCENARIO`) -- the
-planned `framedash run-profile-test` runner will export these for you -- call the
+`framedash run-profile-test` runner exports these for you -- call the
 no-argument `BeginAutomatedSessionFromEnvironment()` instead. All three functions
 are Blueprint-callable. Then gate the build in CI with
 `framedash perf-diff --baseline <old_build_id> --candidate <new_build_id> --fail-on-regression`.
@@ -322,6 +328,56 @@ Two things to know when wiring this into a real pipeline:
   projects strip on ingest -- under COPPA only `build_id` survives. If you run
   automated profiling on a COPPA project, make `build_id` carry everything the
   comparison must distinguish.
+
+### 7. Guaranteed delivery (`FlushBlocking`)
+
+`Flush()` is fire-and-forget: it starts a send and returns immediately, and the
+periodic 30s cadence keeps the queue moving. At moments where you can afford a
+short block and want to *confirm* delivery -- level end, a checkpoint, or just
+before quit -- call `FlushBlocking(TimeoutMs)` instead:
+
+```cpp
+if (auto* Framedash = GetGameInstance()->GetSubsystem<UFramedashSubsystem>())
+{
+    // Blocks the game thread up to 3s until everything buffered (including
+    // offline-queue and in-flight batches) is confirmed delivered.
+    const bool bDelivered = Framedash->FlushBlocking(3000);
+}
+```
+
+It returns `true` only when every event buffered at call time was delivered
+within the budget (or there was nothing to send), and `false` on timeout, a send
+failure that left events queued for retry, a non-positive `TimeoutMs`, when the
+SDK is not initialized or sending is disabled (endpoint-security fail-closed), or
+when called off the game thread. A batch whose delivery is confirmed only after
+the budget elapsed is still acknowledged (never resent); the `false` return then
+reports only the budget overrun. Guarantees:
+
+- **Blocks the game thread** for up to `TimeoutMs` while it drains only
+  transport-owned Framedash dispatch and completion queues -- call it only at safe
+  pause points, never every frame or from a gameplay hot path (use `Flush()` there).
+  It does not tick UE's process-global HTTP manager or drain the shared game-thread
+  task graph. Async-cadence serialization already in progress, primary HTTP results,
+  and direct-socket fallback results all cross these isolated queues. Blocking
+  serialize/gzip work is split to a conservatively estimated 1 MiB of UTF-8 data per
+  chunk and re-checks the deadline between CPU units; a single event is the
+  unavoidable residual unit. If one wave fails, later waves remain buffered so the
+  offline queue's durable prefix can never be acknowledged out of order.
+  Ticker-scheduled retries and reactive 413 redispatch remain asynchronous.
+  `TimeoutMs` is clamped to at most 30000 ms.
+- **No event loss** on `false` for timeouts and transient failures: undelivered
+  events stay buffered, persisted, or tracked in flight; the offline-queue durability
+  is unchanged. With the offline queue **disabled**, a batch still in flight at the
+  deadline is not copied preemptively: eventual success settles it without a duplicate,
+  while retry exhaustion re-enqueues it once in memory. As with any queue-off telemetry,
+  an unresolved batch does not survive immediate process exit. A permanent server
+  rejection (e.g. an invalid API key 401 or an unsplittable oversized batch) removes the
+  tracked batch without retry -- identical to the async `Flush()` poison-drop policy.
+  `FlushBlocking` surfaces that drop as `false` instead of silent success.
+- **Fail-safe**: never throws or crashes, and the SDK keeps operating normally
+  after the call returns either way.
+
+`FlushBlocking` is Blueprint-callable.
 
 ## In-Editor Quickstart
 

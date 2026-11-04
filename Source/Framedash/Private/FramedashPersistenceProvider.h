@@ -21,7 +21,6 @@ public:
 	virtual bool Clear() = 0;
 };
 
-/** No-op persistence provider for projects that explicitly disable disk queueing. */
 class FNullPersistence final : public IPersistenceProvider
 {
 public:
@@ -32,7 +31,6 @@ public:
 	virtual bool Clear() override;
 };
 
-/** File-backed persistence provider stored under Project/Saved/Framedash. */
 class FFilePersistence final : public IPersistenceProvider
 {
 public:

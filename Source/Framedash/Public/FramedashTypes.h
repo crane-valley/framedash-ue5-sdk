@@ -14,7 +14,6 @@ enum class EFramedashTelemetrySource : uint8
 	Automated = 2,
 };
 
-/** Internal event representation before Protobuf serialization. */
 struct FFramedashEvent
 {
 	FString EventName;
@@ -39,7 +38,6 @@ struct FFramedashEvent
 	float RenderThreadMs = 0.0f;
 };
 
-/** Performance metrics snapshot. */
 struct FFramedashPerformanceSnapshot
 {
 	float Fps = 0.0f;
@@ -50,13 +48,12 @@ struct FFramedashPerformanceSnapshot
 	float RenderThreadMs = 0.0f;
 };
 
-/** SDK constants (matching Unity SDK). */
 namespace FramedashConstants
 {
 	constexpr int32 MaxBatchSize = 100;
 	constexpr float FlushIntervalSeconds = 30.0f;
 	constexpr float HeartbeatIntervalSeconds = 10.0f;
-	constexpr int32 MaxPayloadBytes = 102400; // 100 KB
+	constexpr int32 MaxPayloadBytes = 102400;
 	constexpr int32 MaxRetries = 5;
 	// Whole-request timeout. Bounded to 10s (not 30s) so a broken-IPv6 network -- a
 	// global AAAA advertised via Router Advertisement with no working route -- fails
@@ -97,8 +94,18 @@ namespace FramedashConstants
 	constexpr int32 MaxPersistedEvents = 1000;
 	constexpr int32 EventBufferCapacity = MaxPersistedEvents + MaxBatchSize;
 	constexpr int32 EstimatedBytesPerEvent = 500;
+	// Upper bound for FlushBlocking's caller-supplied budget. A synchronous flush
+	// blocks the game thread, so cap the wait even if a caller passes a larger value
+	// -- telemetry delivery must never stall the game for more than a visible-hitch
+	// window. Mirrors the Unity/Godot synchronous-flush clamp.
+	constexpr int32 MaxFlushBlockingMs = 30000;
+	// Per-iteration step of the FlushBlocking pump loop: the delta fed to the HTTP
+	// manager tick and the sleep between iterations. Small enough to keep completion
+	// latency low, large enough to yield the core so the socket/OS makes progress
+	// instead of busy-spinning.
+	constexpr float BlockingPumpStepSeconds = 0.002f;
 }
 
 // String constants outside namespace to avoid UHT parsing issues with inline variables
-#define FRAMEDASH_SDK_VERSION TEXT("0.1.13")
+#define FRAMEDASH_SDK_VERSION TEXT("0.1.14")
 #define FRAMEDASH_SDK_NAME TEXT("ue5")

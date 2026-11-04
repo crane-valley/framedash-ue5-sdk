@@ -212,7 +212,7 @@ bool TryReadEvent(const TSharedPtr<FJsonObject>& Object, FFramedashEvent& OutEve
 	OutEvent.RenderThreadMs = static_cast<float>(GetOptionalNumber(Object, TEXT("renderThreadMs")));
 	return true;
 }
-} // namespace
+}
 
 TArray<FFramedashEvent> FNullPersistence::Load()
 {

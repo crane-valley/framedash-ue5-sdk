@@ -6,11 +6,9 @@
 #include "FramedashTypes.h"
 #include "FramedashMemorySample.h"
 
-/** Collects performance metrics (FPS, frame time, memory). */
 class FFramedashPerformanceCollector
 {
 public:
-	/** Collect a snapshot of current performance metrics. */
 	FFramedashPerformanceSnapshot Collect() const;
 
 	// Sample memory-category detail (RHI VRAM + optional LLM breakdown) for the

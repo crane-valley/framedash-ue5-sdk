@@ -23,7 +23,7 @@ In scope:
 
 - The Framedash web application and REST API (`app.framedash.dev`)
 - The telemetry ingestion endpoint
-- The official SDKs (Unity, UE5)
+- The official SDKs (Unity, UE5, Godot)
 - The published packages (`@framedash/api-client`, `@framedash/cli`,
   `@framedash/mcp-server`) and the protobuf schema
 
@@ -51,8 +51,8 @@ Out of scope:
 - Remediate confirmed vulnerabilities on a risk-prioritized timeline and notify
   you when the fix is live.
 
-These are good-faith operational targets for the current pre-GA stage, not a
-contractual service-level agreement.
+These are good-faith operational targets, not a contractual service-level
+agreement.
 
 ## Safe harbor
 
