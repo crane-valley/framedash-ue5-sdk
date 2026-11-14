@@ -71,6 +71,16 @@ The SDK automatically sends the following events with `Source=Automated`. These 
 
 Both events include full performance metrics from `FramedashPerformanceCollector`.
 
+## Automatic Flush
+
+The SDK requests a flush at 100 buffered events, after 30 seconds, or when its
+payload estimate reaches 102,400 bytes. The estimate is a fixed 500 bytes per
+event; it does not measure attribute text, encoded Protobuf, or gzip bytes.
+With the defaults, the 100-event trigger fires before the size estimate reaches
+its limit. For example, 80 attribute-heavy events still count as 40,000 estimated
+bytes even when their encoded payload is larger than 100 KiB. Transport separately
+splits oversized serialized requests to respect its payload limit.
+
 ## Offline Queue
 
 The SDK persists unsent events to `Project/Saved/Framedash/offline-queue.json`
@@ -245,7 +255,20 @@ No C++ code required. The subsystem reads these settings on startup.
 
 These settings are also editable in **Project Settings > Plugins > Framedash**.
 
-**Option B — Manual Initialize from C++:**
+The editor heatmap uses separate settings under **Editor Preferences > Plugins > Framedash Heatmap** for its API URL, project ID, read key, and display options.
+
+**Option B — Manual Initialize from C++ or Blueprint:**
+
+`InitializeTelemetry` is Blueprint-callable: get the Framedash Game Instance
+Subsystem and call **Initialize Telemetry** with the key supplied by your host.
+Disable `bAutoInitialize` when using manual initialization. The plugin does not
+provide a Blueprint node that reads an API key from the process environment.
+For a local Blueprint-only test, put the same settings from Option A in the
+project's untracked `Saved/Config/WindowsEditor/Game.ini`; keep that private file
+out of source control and remove the test key after use. This requires no change
+to the packaged `Config/DefaultGame.ini` or the plugin's defaults.
+If overriding the endpoint in an `.ini` file, quote the URL, for example
+`EndpointUrl="http://127.0.0.1:3001"`; UE otherwise truncates it at `//`.
 
 ```cpp
 #include "FramedashSubsystem.h"
@@ -497,7 +520,7 @@ Hit **Play** (PIE) in the Unreal Editor. The SDK will:
 
 1. Auto-initialize on `GameInstance` startup
 2. Collect FPS, frame time, and memory metrics every tick
-3. Buffer events and flush periodically (every ~30 seconds, 100 events, or 100KB — whichever first)
+3. Buffer events and request a flush at 30 seconds, 100 events, or 102,400 estimated bytes (500 bytes/event), whichever comes first
 4. POST compressed Protobuf payloads to `http://localhost:8787/v1/events`
 
 ### 5. Verify Data

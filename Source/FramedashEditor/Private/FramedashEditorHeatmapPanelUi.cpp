@@ -85,7 +85,7 @@ void SFramedashEditorHeatmapPanel::Construct(const FArguments& Arguments)
 			.Padding(12.0f, 0.0f, 12.0f, 10.0f)
 			[
 				SNew(STextBlock)
-				.Text(LOCTEXT("SettingsHint", "Configure the API URL, project ID, read key, opacity, alignment, and Z offset under Project Settings > Plugins > Framedash Heatmap."))
+				.Text(LOCTEXT("SettingsHint", "Configure the API URL, project ID, read key, opacity, alignment, and Z offset under Editor Preferences > Plugins > Framedash Heatmap."))
 				.AutoWrapText(true)
 				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 			]

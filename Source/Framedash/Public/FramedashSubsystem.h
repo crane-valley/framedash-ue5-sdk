@@ -217,7 +217,7 @@ public:
 	UFUNCTION(BlueprintPure, Category="Framedash")
 	bool IsInitialized() const { return bInitialized; }
 
-#if WITH_DEV_AUTOMATION_TESTS && FRAMEDASH_WITH_AUTOMATION_SPECS
+#if defined(FRAMEDASH_WITH_AUTOMATION_SPECS) && FRAMEDASH_WITH_AUTOMATION_SPECS && WITH_DEV_AUTOMATION_TESTS
 	// The dead-loopback FlushBlocking spec needs to distinguish an applied completion
 	// from a timeout whose pump never observed the pre-existing async request.
 	int32 GetRegisteredTransportCompletionCountForTesting() const;

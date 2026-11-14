@@ -100,7 +100,7 @@ FReply SFramedashEditorHeatmapPanel::FetchHeatmap()
 	{
 		StatusText = LOCTEXT(
 			"InvalidQuerySettings",
-			"Days/Cell Size in Project Settings is not one of the allowed values (1/7/14/30 or 5/10/25/50).");
+			"Days/Cell Size in Editor Preferences is not one of the allowed values (1/7/14/30 or 5/10/25/50).");
 		return FReply::Handled();
 	}
 
@@ -301,7 +301,7 @@ void SFramedashEditorHeatmapPanel::OnSettingsObjectPropertyChanged(
 			"Connection settings changed. Refresh maps for the new project.")
 		: LOCTEXT(
 			"QuerySettingsChangedExternally",
-			"Query settings changed in Project Settings. Fetch heatmap data for the new selection.");
+			"Query settings changed in Editor Preferences. Fetch heatmap data for the new selection.");
 }
 
 void SFramedashEditorHeatmapPanel::HandleMapsResponse(

@@ -6,6 +6,14 @@ follows [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-11-14
+
+### Fixed
+
+- Public subsystem headers compile in strict consumer modules without defining
+  the plugin's private automation-test macro.
+- Editor heatmap guidance points to Editor Preferences, where its settings live.
+
 ## [0.1.14] - 2026-11-05
 
 ### Added
