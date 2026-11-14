@@ -77,6 +77,25 @@ before it stages or zips anything: packaging builds an operator's working tree,
 which CI has not necessarily seen. It fails closed -- a host that cannot
 configure, build, or pass the harness cannot produce a release zip.
 
+## Strict public-header consumer
+
+`ConsumerProject/` is a separate game module that includes the public subsystem
+header with `BuildSettingsVersion.Latest`. It deliberately defines no Framedash
+test macros: a plugin-only build cannot catch a private build definition leaking
+into a public header.
+
+Copy this fixture to a fresh short path, then extract the locally packaged
+matching-engine binary zip into its `Plugins/` directory. Build it with:
+
+```powershell
+& "$EngineRoot/Engine/Build/BatchFiles/Build.bat" FramedashConsumerEditor Win64 Development `
+  "-Project=$ConsumerRoot/FramedashConsumer.uproject" -WaitMutex -NoHotReloadFromIDE
+```
+
+Leave `FRAMEDASH_BUILD_AUTOMATION_SPECS` unset for this consumer check. The
+fixture has no credentials or runtime initialization and makes no ingest calls.
+Run it separately from the opt-in Automation Specs host below.
+
 ## In-engine Automation Specs
 
 Runtime behavior that needs a live engine (`FString`/`TArray`, the HTTP module,

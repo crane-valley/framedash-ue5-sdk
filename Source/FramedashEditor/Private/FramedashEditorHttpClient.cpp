@@ -192,7 +192,7 @@ bool FFramedashEditorHttpClient::PrepareRequest(
 	OutProjectId = Settings.ProjectId.TrimStartAndEnd();
 	if (OutBaseUrl.IsEmpty())
 	{
-		OutError = TEXT("Configure the Framedash API base URL in Project Settings.");
+		OutError = TEXT("Configure the Framedash API base URL in Editor Preferences.");
 		return false;
 	}
 
@@ -205,12 +205,12 @@ bool FFramedashEditorHttpClient::PrepareRequest(
 	}
 	if (OutApiKey.IsEmpty())
 	{
-		OutError = TEXT("Configure an analytics:read API key in Project Settings or set FRAMEDASH_ANALYTICS_API_KEY before launching Unreal Editor.");
+		OutError = TEXT("Configure an analytics:read API key in Editor Preferences or set FRAMEDASH_ANALYTICS_API_KEY before launching Unreal Editor.");
 		return false;
 	}
 	if (OutProjectId.IsEmpty())
 	{
-		OutError = TEXT("Configure a Framedash project ID in Project Settings.");
+		OutError = TEXT("Configure a Framedash project ID in Editor Preferences.");
 		return false;
 	}
 	return true;
